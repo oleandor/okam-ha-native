@@ -58,6 +58,9 @@ to start wake-up. The waking-up image remains visible while the camera connects;
 this commonly takes 20–30 seconds. Keep live view open for at least 45 seconds
 on the first attempt.
 
+If the waking-up image remains after a snapshot is available, confirm that both
+the app and integration are version 1.1.1 or newer, then restart Home Assistant.
+
 If it remains blank:
 
 1. Confirm `/ready` reports `camera_ready: true`.
@@ -88,6 +91,11 @@ another preferred value, after resolving the existing conflict.
 Some dashboard cards keep a stream open while their page remains displayed.
 Close the dashboard or browser tab, wait longer than `idle_timeout_seconds`, and
 refresh `/ready`.
+
+The default is 120 seconds. This deliberately keeps the camera warm across
+short page changes. To use another value, open **Settings → Devices & services
+→ O-KAM Native Bridge → Configure** and set **Idle disconnect delay** between
+10 and 600 seconds.
 
 Expected idle fields are:
 

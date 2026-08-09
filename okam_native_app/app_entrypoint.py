@@ -71,6 +71,7 @@ def get_status() -> dict[str, object]:
             stream_running=session.running,
             stream_viewers=session.viewers,
             stream_media_ready=session.media_ready,
+            idle_timeout_seconds=int(bridge.session.idle_timeout),
             clean_disconnect=session.clean_disconnect,
             stream_error=session.last_error,
             phase=(
@@ -360,7 +361,7 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
     options = load_options()
     api_token = options.get("api_token")
     alias = options.get("camera_id") or "cabin"
-    idle_timeout = options.get("idle_timeout_seconds", 30)
+    idle_timeout = options.get("idle_timeout_seconds", 120)
     if not isinstance(api_token, str) or not 16 <= len(api_token) <= 1024:
         set_status(configuration_required=True, camera_ready=False, phase="api_token_required")
         print("bridge_ready=false configuration_required=api_token", flush=True)

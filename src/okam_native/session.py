@@ -61,7 +61,7 @@ class StreamSubscription:
 
 
 class NativeStreamSession:
-    def __init__(self, starter: StreamStarter, *, idle_timeout: float = 30.0) -> None:
+    def __init__(self, starter: StreamStarter, *, idle_timeout: float = 120.0) -> None:
         self._starter = starter
         self.idle_timeout = idle_timeout
         self._lock = threading.RLock()

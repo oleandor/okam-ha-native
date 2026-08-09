@@ -1,5 +1,5 @@
 name: O-KAM Native Bridge
-version: 1.1.0
+version: 1.1.1
 slug: okam_native
 description: Self-contained native ARM64 O-KAM camera bridge for Home Assistant
 url: https://github.com/oleandor/okam-ha-native
@@ -18,7 +18,7 @@ options:
   account_password: null
   api_token: null
   camera_id: cabin
-  idle_timeout_seconds: 30
+  idle_timeout_seconds: 120
   run_connect_test: false
   run_auth_test: false
   run_stream_test: false

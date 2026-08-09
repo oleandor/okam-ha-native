@@ -65,6 +65,7 @@ class CameraBridge:
             "state": state,
             "viewers": session.viewers,
             "media_ready": session.media_ready,
+            "idle_timeout_seconds": int(self.session.idle_timeout),
             "battery_percent": None,
             "signal_dbm": None,
             "last_event": None,

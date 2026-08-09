@@ -18,7 +18,7 @@ that account in the O-KAM app once and confirm that live view works.
 | `account_password` | Password of the O-KAM account |
 | `api_token` | A random local secret of at least 16 characters chosen by you |
 | `camera_id` | Home Assistant camera alias, for example `cabin` |
-| `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `30` is recommended |
+| `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `120` is recommended |
 
 The API token is not an O-KAM credential. Create a new random value and enter
 the identical value when adding the Home Assistant integration.
@@ -58,7 +58,7 @@ Use:
 - Bridge URL: `http://HOME_ASSISTANT_LAN_IP:8099`
 - API token: the value configured above
 - Camera ID: the configured alias, such as `cabin`
-- Idle timeout: `30`
+- Idle timeout: `120`
 
 Do not use `localhost` for the bridge URL. With the `cabin` alias, a new
 installation creates `camera.cabin` unless that entity ID is already occupied.
@@ -69,7 +69,10 @@ A sleeping camera displays a sleeping image without waking it. Open live view
 to wake the camera; a waking-up image remains visible until video arrives,
 which commonly takes 20–30 seconds. Multiple viewers share one camera
 connection. After the final viewer closes, the bridge stops and disconnects
-after the configured idle timeout.
+after the configured idle timeout. The 120-second default allows brief page
+changes and reloads to reuse the warm connection. Installations created before
+version 1.1.1 retain their selected value; use the integration's **Configure**
+action to change an older 30-second value to 120 seconds.
 
 Do not expose TCP port 8099 to the internet. See the repository
 [README](https://github.com/oleandor/okam-ha-native#readme) and

@@ -73,7 +73,7 @@ configuration.
    | `account_password` | Password of the O-KAM account |
    | `api_token` | A new random secret of at least 16 characters that you choose |
    | `camera_id` | Local camera alias, for example `cabin` |
-   | `idle_timeout_seconds` | `30` is recommended |
+   | `idle_timeout_seconds` | `120` seconds is recommended |
 
    Leave all four `run_*_test` options disabled during normal operation.
 
@@ -122,7 +122,7 @@ integration.
    | Bridge URL | `http://HOME_ASSISTANT_LAN_IP:8099` |
    | API token | The same local token configured in the app |
    | Camera ID | The `camera_id` configured in the app, such as `cabin` |
-   | Idle timeout | `30` seconds is recommended |
+   | Idle timeout | `120` seconds is recommended |
    | Status refresh interval | `900` seconds is recommended |
 
 Use the actual LAN address of Home Assistant, for example
@@ -142,6 +142,14 @@ until video arrives.
 Live view uses the camera's native H.264 stream. Multiple viewers share the
 same connection. When the final viewer closes, the bridge waits for the
 configured idle timeout, stops the stream, and disconnects from the camera.
+The 120-second default lets brief page changes and reloads reuse the warm
+connection. A live camera card requests a stream whenever it is displayed; the
+sleeping image appears after all live viewers have closed and the idle timeout
+has elapsed.
+
+For an integration installed before version 1.1.1, open **Settings → Devices &
+services → O-KAM Native Bridge → Configure** and change **Idle disconnect
+delay** from `30` to `120`. The change is applied immediately.
 
 ## Updating
 

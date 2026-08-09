@@ -91,7 +91,7 @@ RUN cd "/tmp/FFmpeg-n${FFMPEG_VERSION}" \
     && cp ffmpeg /out/ffmpeg/bin/ffmpeg
 
 FROM python:3.12-slim-bookworm
-ARG BUILD_VERSION=1.1.0
+ARG BUILD_VERSION=1.1.1
 ARG BUILD_ARCH=aarch64
 LABEL io.hass.version=$BUILD_VERSION \
       io.hass.arch=$BUILD_ARCH \
