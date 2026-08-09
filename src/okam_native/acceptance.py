@@ -11,6 +11,8 @@ from typing import Any
 REQUIRED_GATES = (
     "enumerate_one_shared_camera",
     "wake_physical_camera",
+    "connect_physical_camera",
+    "authenticate_camera",
     "receive_h264",
     "decode_stream",
     "create_snapshot",

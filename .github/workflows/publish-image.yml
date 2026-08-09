@@ -8,6 +8,7 @@ on:
       - "src/okam_native/**"
       - "native/android_compat/**"
       - "native/hybris_probe/**"
+      - "native/hybris_connect/**"
       - "tools/fetch_official_sdk.py"
       - "docs/vendor-artifacts.json"
       - ".github/workflows/publish-image.yml"

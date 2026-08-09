@@ -16,6 +16,11 @@ The development path has three independently testable layers:
 3. `native/arm64_probe` validates that the official ARM64 Android library and a
    separately supplied Bionic runtime load, then checks for the exact P2P/JNI
    symbols proven on Windows. Vendor binaries are never committed.
+4. `native/hybris_connect` uses the vendor library's exported non-JNI client
+   lifecycle beneath the official Java wrapper. It accepts the transport ID and
+   initialization parameter only through length-prefixed stdin, reports only a
+   numeric state plus booleans, and destroys every client after its bounded
+   connect/disconnect trial.
 
 The Windows helper is a protocol oracle, not the product. The product cannot be
 released as 0.2.0 until `okam-acceptance` passes on the physical Raspberry Pi

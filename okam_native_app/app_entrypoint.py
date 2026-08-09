@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -12,18 +13,28 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from okam_native.account import AccountError, Eye4AccountClient
+from okam_native.account import AccountDevice, AccountError, Eye4AccountClient
+from okam_native.p2p import (
+    P2PError,
+    get_service_parameter,
+    resolve_client_id,
+    run_connect_probe,
+)
+from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
 
 
 DATA = Path("/data")
 VENDOR = DATA / "vendor"
 PROBE = Path("/opt/okam/okam-hybris-probe")
+CONNECT_HELPER = Path("/opt/okam/okam-hybris-connect")
 LIBRARY = VENDOR / "libOKSMARTPPCS.so"
 STATUS: dict[str, object] = {
     "service": "okam-native-lab",
     "loader_ready": False,
     "account_ready": False,
+    "p2p_ready": False,
     "camera_ready": False,
+    "connect_test_enabled": False,
     "configuration_required": True,
     "phase": "starting",
 }
@@ -38,7 +49,11 @@ def set_status(**values: object) -> None:
 def load_vendor_runtime() -> None:
     set_status(phase="fetching_vendor_sdk")
     VENDOR.mkdir(parents=True, exist_ok=True)
-    if not LIBRARY.exists() or not (VENDOR / "libvp_log.so").exists():
+    if (
+        not LIBRARY.exists()
+        or not (VENDOR / "libvp_log.so").exists()
+        or not (VENDOR / "device_wakeup_server.dart").exists()
+    ):
         subprocess.run(
             [
                 sys.executable,
@@ -88,14 +103,14 @@ def load_options() -> dict[str, object]:
     return value
 
 
-def enumerate_account() -> None:
+def enumerate_account() -> AccountDevice | None:
     options = load_options()
     username = options.get("account_username")
     password = options.get("account_password")
     alias = options.get("camera_id") or "cabin"
     if not isinstance(username, str) or not username or not isinstance(password, str) or not password:
         set_status(configuration_required=True)
-        return
+        return None
     if not isinstance(alias, str):
         raise RuntimeError("camera alias is invalid")
     set_status(phase="enumerating_account", configuration_required=False)
@@ -113,6 +128,65 @@ def enumerate_account() -> None:
         phase="account_enumerated",
     )
     print("account_enumerated=true device_count=1", flush=True)
+    return devices[0]
+
+
+def p2p_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "LD_LIBRARY_PATH": "/opt/hybris/lib",
+            "HYBRIS_LINKER_DIR": "/opt/hybris/lib/libhybris/linker",
+            "HYBRIS_ANDROID_SDK_VERSION": "28",
+            "HYBRIS_LD_LIBRARY_PATH": "/opt/android-stubs:/opt/bionic:/data/vendor",
+        }
+    )
+    return environment
+
+
+def run_p2p_acceptance(device: AccountDevice) -> None:
+    options = load_options()
+    enabled = options.get("run_connect_test") is True
+    set_status(connect_test_enabled=enabled)
+    if not enabled:
+        return
+    credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
+    if credentials is None:
+        raise WakeError("official wake configuration was unavailable")
+    client_id = resolve_client_id(device.uid)
+    service_parameter = get_service_parameter(client_id)
+    wake_requested = False
+    responsive_servers = 0
+    last_state = -1
+    for attempt in range(1, 4):
+        set_status(phase="waking_camera", connect_attempt=attempt)
+        try:
+            wake = asyncio.run(wake_camera(device.uid, credentials, timeout=12.0))
+            wake_requested = wake_requested or wake.requested
+            responsive_servers = max(responsive_servers, wake.responsive_servers)
+        except WakeError:
+            pass
+        set_status(
+            wake_requested=wake_requested,
+            wake_responsive_servers=responsive_servers,
+            phase="connecting_p2p",
+        )
+        result = run_connect_probe(
+            str(CONNECT_HELPER),
+            str(LIBRARY),
+            client_id,
+            service_parameter,
+            environment=p2p_environment(),
+        )
+        last_state = result.connect_state
+        if result.connected and result.disconnected:
+            set_status(p2p_ready=True, phase="p2p_connected", connect_attempt=attempt)
+            print("p2p_connected=true clean_disconnect=true", flush=True)
+            return
+        if attempt < 3:
+            time.sleep(5)
+    set_status(connect_state=last_state)
+    raise P2PError("camera did not establish a native P2P session")
 
 
 class StatusHandler(BaseHTTPRequestHandler):
@@ -123,7 +197,11 @@ class StatusHandler(BaseHTTPRequestHandler):
             status = 200
         elif self.path == "/ready":
             ready = payload["loader_ready"] and (
-                payload["account_ready"] or payload["configuration_required"]
+                payload["configuration_required"]
+                or (
+                    payload["account_ready"]
+                    and (not payload["connect_test_enabled"] or payload["p2p_ready"])
+                )
             )
             status = 200 if ready else 503
         else:
@@ -145,9 +223,11 @@ def main() -> int:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         load_vendor_runtime()
-        enumerate_account()
+        device = enumerate_account()
+        if device is not None:
+            run_p2p_acceptance(device)
     except Exception as error:
-        phase = "account_enumeration_error" if STATUS["loader_ready"] else "native_loader_error"
+        phase = "startup_error" if STATUS["loader_ready"] else "native_loader_error"
         set_status(phase=phase, error=type(error).__name__)
         print(f"startup_ready=false error={type(error).__name__}", flush=True)
     try:

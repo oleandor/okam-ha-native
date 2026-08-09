@@ -2,6 +2,8 @@
   "gates": {
     "enumerate_one_shared_camera": false,
     "wake_physical_camera": false,
+    "connect_physical_camera": false,
+    "authenticate_camera": false,
     "receive_h264": false,
     "decode_stream": false,
     "create_snapshot": false,

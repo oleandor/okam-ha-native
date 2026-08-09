@@ -9,9 +9,10 @@ def test_native_lab_is_a_prebuilt_arm64_ha_app() -> None:
     assert "image: ghcr.io/oleandor/okam-ha-native" in config
     assert "- aarch64" in config
     assert "boot: manual" in config
-    assert "version: 0.0.3" in config
+    assert "version: 0.0.4" in config
     assert "account_username: email" in config
     assert "account_password: password" in config
+    assert "run_connect_test: bool" in config
 
 
 def test_native_image_excludes_windows_gui_runtime() -> None:
@@ -28,4 +29,6 @@ def test_status_distinguishes_loader_from_camera_acceptance() -> None:
     )
     assert '"loader_ready": False' in entrypoint
     assert '"account_ready": False' in entrypoint
+    assert '"p2p_ready": False' in entrypoint
     assert '"camera_ready": False' in entrypoint
+    assert "p2p_connected=true clean_disconnect=true" in entrypoint

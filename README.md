@@ -8,8 +8,8 @@ demand and forwards its native H.264 stream.
 This is a separate project from
 [`okam-ha-arm64`](https://github.com/oleandor/okam-ha-arm64). Version 0.1.4 of
 that project remains the working compatibility fallback based on the official
-WebViewer. Version 0.0.3 is an installable **native-runtime and account
-enumeration acceptance app**, not yet a camera replacement. Version 0.2.0 will
+WebViewer. Version 0.0.4 is an installable **native wake/connect acceptance
+app**, not yet a camera replacement. Version 0.2.0 will
 not be published until the physical camera passes every acceptance gate in
 `docs/acceptance.example.json` on an ARM64 Home Assistant host.
 
@@ -35,6 +35,11 @@ not be published until the physical camera passes every acceptance gate in
 - The secondary account is enumerated directly through the official fixed-host
   HTTPS flow. A real view-only account returned exactly one shared camera
   without WebViewer; identifiers, tokens, and credentials remain out of logs.
+- The official virtual-device resolver and P2P service directory are reproduced
+  with fixed HTTPS origins. The physical camera accepted a real ARM64 native
+  connection (`ONLINE`, state 3) and the helper immediately disconnected it
+  cleanly under ARM64 emulation. The same gate is now opt-in for validation on
+  the physical Raspberry Pi.
 - Automated tests enforce redaction, archive safety, official wake message
   signing, and the native-release gate.
 
@@ -43,16 +48,18 @@ not be published until the physical camera passes every acceptance gate in
 1. Open **Settings > Apps > App store > Repositories**.
 2. Add `https://github.com/oleandor/okam-ha-native`.
 3. Install **O-KAM Native Lab**.
-4. Configure the secondary/view-only account and alias, then start the app.
+4. Configure the secondary/view-only account and alias. Set
+   `run_connect_test: true`, then start the app.
 5. Confirm its log prints `native_loader_ready=true` and
-   `account_enumerated=true device_count=1`.
+   `account_enumerated=true device_count=1`, followed by
+   `p2p_connected=true clean_disconnect=true`.
 6. Optionally open `http://HOME_ASSISTANT_IP:8099/ready` and confirm both
-   `loader_ready` and `account_ready` are `true`.
+   `loader_ready`, `account_ready`, and `p2p_ready` are `true`.
 
 The lab app intentionally creates no camera entity yet. A green loader result
-proves the Windows-free ARM64 runtime and account enumeration on the Pi;
-wake/connect, H.264 forwarding, and disconnect remain the physical-camera
-gates.
+proves the Windows-free ARM64 runtime, account enumeration, wake, native P2P
+connect, and clean disconnect on the Pi. Camera authentication and H.264
+forwarding remain the next physical-camera gates.
 
 ## Development sequence
 

@@ -28,10 +28,12 @@ def test_extracts_only_arm64_library_from_duplicate_aars(tmp_path: Path) -> None
         "one/" + MODULE.AAR_NAME: aar,
         "two/" + MODULE.AAR_NAME: aar,
         "one/" + MODULE.LOG_AAR_NAME: log_aar,
+        "FlutterAppSDK/" + MODULE.WAKE_SOURCE_SUFFIX: b"wake-source",
     }))
-    result, log_result = MODULE.extract_arm64(sdk_path, tmp_path / "output")
+    result, log_result, wake_result = MODULE.extract_arm64(sdk_path, tmp_path / "output")
     assert result.read_bytes() == b"ELF-test"
     assert log_result.read_bytes() == b"ELF-log"
+    assert wake_result.read_bytes() == b"wake-source"
 
 
 def test_rejects_zip_slip(tmp_path: Path) -> None:

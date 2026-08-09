@@ -13,20 +13,23 @@
   securely stored server parameter without WebViewer or a GUI.
 - The official SDK archive matched its pinned SHA-256. Both required ARM64
   vendor libraries were extracted and their dependency closure is complete.
+- The minimal libhybris plus API 28 Bionic closure loads the official ARM64
+  library and resolves both the PPCS/JNI surface and the non-JNI client API.
+- The secondary account enumerates exactly one shared camera without WebViewer.
+  Its virtual ID resolves through the official fixed host, and the official P2P
+  directory returns the initialization parameter without logging either value.
+- Both official wake endpoints accepted a bounded request for the physical
+  camera. The ARM64 native helper then reached `ONLINE` state 3 against that
+  camera and performed a clean disconnect under ARM64 emulation.
 
 ## Not yet accepted
 
-- The first direct console streaming trial safely accepted the official
-  connection configuration but timed out waiting for the camera. At the same
-  time, the previously proven low-power wake service was unreachable. This is
-  a failed physical acceptance trial, not proof that the console ABI or camera
-  connection works.
-- No Bionic runtime has been selected or shipped. The measured seven-file
-  Bionic system closure must load the two vendor libraries before connection
-  work is ported.
-- Account login and shared-camera enumeration still need a native client. The
-  development credential captured from the official process is not a
-  production setup mechanism.
+- The native wake/connect/disconnect path still needs the same successful result
+  from the Home Assistant app on the physical Raspberry Pi.
+- Camera-level `admin` authentication and its response callback are not yet
+  accepted through the native helper.
+- Native H.264 receive, snapshot, on-demand reuse, idle disconnect, and clean
+  service shutdown remain unaccepted.
 
 Version 0.2.0 remains blocked by the machine-readable physical gates. The
 repository version stays at 0.0.x while these items are under development.

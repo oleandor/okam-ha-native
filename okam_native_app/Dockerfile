@@ -27,6 +27,7 @@ RUN git clone https://github.com/libhybris/libhybris.git /src/libhybris \
 
 COPY native/android_compat /src/android_compat
 COPY native/hybris_probe /src/hybris_probe
+COPY native/hybris_connect /src/hybris_connect
 RUN cmake -S /src/android_compat -B /src/android_compat/build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build /src/android_compat/build --parallel 2 \
     && mkdir -p /out/android-stubs \
@@ -35,7 +36,12 @@ RUN cmake -S /src/android_compat -B /src/android_compat/build -DCMAKE_BUILD_TYPE
       -DHYBRIS_INCLUDE_DIR=/out/hybris/include \
       -DHYBRIS_COMMON_LIBRARY=/out/hybris/lib/libhybris-common.so \
     && cmake --build /src/hybris_probe/build --parallel 2 \
-    && cp /src/hybris_probe/build/okam-hybris-probe /out/
+    && cp /src/hybris_probe/build/okam-hybris-probe /out/ \
+    && cmake -S /src/hybris_connect -B /src/hybris_connect/build \
+      -DHYBRIS_INCLUDE_DIR=/out/hybris/include \
+      -DHYBRIS_COMMON_LIBRARY=/out/hybris/lib/libhybris-common.so \
+    && cmake --build /src/hybris_connect/build --parallel 2 \
+    && cp /src/hybris_connect/build/okam-hybris-connect /out/
 
 RUN curl -fsSL "$AOSP_URL" -o /tmp/aosp.zip \
     && echo "$AOSP_SHA1  /tmp/aosp.zip" | sha1sum -c - \
@@ -64,6 +70,7 @@ COPY --from=native-build /out/hybris /opt/hybris
 COPY --from=native-build /out/bionic /opt/bionic
 COPY --from=native-build /out/android-stubs /opt/android-stubs
 COPY --from=native-build /out/okam-hybris-probe /opt/okam/okam-hybris-probe
+COPY --from=native-build /out/okam-hybris-connect /opt/okam/okam-hybris-connect
 COPY tools/fetch_official_sdk.py /opt/okam/tools/fetch_official_sdk.py
 COPY docs/vendor-artifacts.json /opt/okam/docs/vendor-artifacts.json
 COPY src/okam_native /opt/okam/okam_native
