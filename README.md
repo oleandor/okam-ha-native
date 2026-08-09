@@ -6,11 +6,12 @@ WebViewer, Xvfb, desktop, or video transcoder. It wakes the battery camera on
 demand and forwards its native H.264 stream.
 
 This is a separate project from
-[`okam-ha-arm64`](https://github.com/oleandor/okam-ha-arm64). Version 0.1.3 of
+[`okam-ha-arm64`](https://github.com/oleandor/okam-ha-arm64). Version 0.1.4 of
 that project remains the working compatibility fallback based on the official
-WebViewer. **This repository is not yet an installable replacement.** Version
-0.2.0 will not be published until the physical camera passes every acceptance
-gate in `docs/acceptance.example.json` on an ARM64 Home Assistant host.
+WebViewer. Version 0.0.2 is an installable **native-runtime acceptance app**, not
+yet a camera replacement. Version 0.2.0 will not be published until the physical
+camera passes every acceptance gate in `docs/acceptance.example.json` on an
+ARM64 Home Assistant host.
 
 ## What is working today
 
@@ -28,9 +29,24 @@ gate in `docs/acceptance.example.json` on an ARM64 Home Assistant host.
   timed out while the vendor wake service was also unreachable, so it is not
   yet an accepted stream path.
 - The official ARM64 AAR can be extracted from a checksum-pinned vendor SDK,
-  inspected for required PPCS/JNI symbols, and load-tested inside Bionic.
+  inspected for required PPCS/JNI symbols, and load-tested through a pinned
+  libhybris build with a 3.4 MB checksum-pinned AOSP Bionic closure. The real
+  library loaded and every required PPCS/JNI symbol resolved on ARM64.
 - Automated tests enforce redaction, archive safety, official wake message
   signing, and the native-release gate.
+
+## Test the native runtime in Home Assistant
+
+1. Open **Settings > Apps > App store > Repositories**.
+2. Add `https://github.com/oleandor/okam-ha-native`.
+3. Install **O-KAM Native Lab** and start it.
+4. Confirm its log prints `native_loader_ready=true`.
+5. Optionally open `http://HOME_ASSISTANT_IP:8099/ready` and confirm
+   `loader_ready` is `true`.
+
+The lab app intentionally creates no camera entity yet. A green loader result
+proves the Windows-free ARM64 runtime on the Pi; enumeration, wake/connect,
+H.264 forwarding, and disconnect remain the physical-camera gates.
 
 ## Development sequence
 
@@ -92,10 +108,9 @@ The library targets Android/Bionic. `native/arm64_probe` must be compiled and
 run inside a matching minimal Bionic runtime. A glibc `dlopen` failure is not a
 camera failure and must not be hidden by guessed ABI stubs.
 
-`libhybris` was evaluated as a maintained compatibility option, but its own
-deployment description expects a patched stripped-down Android system or
-container. The primary experiment therefore remains the measured minimal
-runtime closure rather than a general Android compatibility environment.
+The runtime uses only libhybris-common, a checksum-pinned minimal AOSP Bionic
+closure, and two measured leaf dependency stubs. It does not ship an Android
+container, emulator, framework, GUI, or Java runtime.
 
 ### 4. Physical release acceptance
 

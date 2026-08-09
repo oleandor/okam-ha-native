@@ -1,0 +1,53 @@
+name: Publish native lab image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "okam_native_app/**"
+      - "native/android_compat/**"
+      - "native/hybris_probe/**"
+      - "tools/fetch_official_sdk.py"
+      - "docs/vendor-artifacts.json"
+      - ".github/workflows/publish-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-okam-native
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read app version
+        id: app
+        shell: bash
+        run: echo "version=$(sed -n 's/^version: //p' okam_native_app/config.yaml)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish ARM64 app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./okam_native_app/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/oleandor/okam-ha-native:${{ steps.app.outputs.version }}
+            ghcr.io/oleandor/okam-ha-native:latest
+          build-args: |
+            BUILD_VERSION=${{ steps.app.outputs.version }}
+            BUILD_ARCH=aarch64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

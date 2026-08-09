@@ -30,8 +30,8 @@ glibc plugin. Its measured vendor closure is `libOKSMARTPPCS.so` plus
 checks that exact AArch64 closure and records hashes and total size. We will not
 paper over Bionic internals with guessed ABI stubs.
 
-Libhybris was evaluated because it is designed to load Bionic libraries in
-regular glibc/musl processes. Its documented deployment expects a patched,
-stripped Android system or container, which is larger and operationally more
-complex than this measured seven-file system closure. It remains a fallback
-experiment, not the primary runtime.
+The accepted loader uses only `libhybris-common`, real API 28 AOSP
+`libc/libm/libdl/libz` plus `linker64`, and measured leaf stubs for `libandroid`
+and `liblog`. The AOSP source archive is checksum pinned and used only while
+building; the final runtime closure is approximately 3.4 MB and contains no
+Android container or framework.
