@@ -1,0 +1,38 @@
+{
+  "title": "O-KAM Native Bridge",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to O-KAM Native Bridge",
+        "description": "Use the local URL and API token configured in the O-KAM Native Bridge app.",
+        "data": {
+          "bridge_url": "Bridge URL",
+          "api_token": "API token",
+          "camera_id": "Camera ID",
+          "idle_timeout": "Idle disconnect delay (seconds)",
+          "snapshot_interval": "Status refresh interval (seconds)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure O-KAM Native Bridge",
+        "data": {
+          "bridge_url": "Bridge URL",
+          "api_token": "API token",
+          "camera_id": "Camera ID",
+          "idle_timeout": "Idle disconnect delay (seconds)",
+          "snapshot_interval": "Status refresh interval (seconds)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Update API token",
+        "data": {"api_token": "API token"}
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the native bridge",
+      "invalid_auth": "The API token is incorrect",
+      "camera_not_found": "The configured camera ID was not found"
+    },
+    "abort": {"already_configured": "This bridge is already configured"}
+  }
+}

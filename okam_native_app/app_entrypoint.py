@@ -6,23 +6,27 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from okam_native.account import AccountDevice, AccountError, Eye4AccountClient
+from okam_native.bridge import CameraBridge, make_handler
 from okam_native.p2p import (
     P2PError,
     get_service_parameter,
+    open_stream_process,
     resolve_client_id,
     run_authentication_probe,
     run_connect_probe,
     run_snapshot_probe,
     run_stream_probe,
 )
+from okam_native.session import NativeStreamSession
 from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
 
 
@@ -49,11 +53,33 @@ STATUS: dict[str, object] = {
     "phase": "starting",
 }
 LOCK = threading.Lock()
+BRIDGE: CameraBridge | None = None
 
 
 def set_status(**values: object) -> None:
     with LOCK:
         STATUS.update(values)
+
+
+def get_status() -> dict[str, object]:
+    with LOCK:
+        payload = dict(STATUS)
+        bridge = BRIDGE
+    if bridge is not None:
+        session = bridge.session.status()
+        payload.update(
+            stream_running=session.running,
+            stream_viewers=session.viewers,
+            clean_disconnect=session.clean_disconnect,
+            stream_error=session.last_error,
+            phase="streaming" if session.running else "bridge_ready",
+        )
+    return payload
+
+
+def get_bridge() -> CameraBridge | None:
+    with LOCK:
+        return BRIDGE
 
 
 def load_vendor_runtime() -> None:
@@ -320,57 +346,101 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
     raise P2PError("camera did not establish a native P2P session")
 
 
-class StatusHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        with LOCK:
-            payload = dict(STATUS)
-        if self.path == "/health":
-            status = 200
-        elif self.path == "/ready":
-            ready = payload["loader_ready"] and (
-                payload["configuration_required"]
-                or (
-                    payload["account_ready"]
-                    and (not payload["connect_test_enabled"] or payload["p2p_ready"])
-                    and (not payload["auth_test_enabled"] or payload["camera_authenticated"])
-                    and (not payload["stream_test_enabled"] or payload["h264_ready"])
-                    and (not payload["snapshot_test_enabled"] or payload["snapshot_ready"])
-                )
-            )
-            status = 200 if ready else 503
-        else:
-            status = 404
-            payload = {"error": "not_found"}
-        body = json.dumps(payload, sort_keys=True).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+def configure_bridge(device: AccountDevice) -> CameraBridge | None:
+    """Prepare the long-lived, on-demand runtime without waking the camera."""
 
-    def log_message(self, format: str, *args: object) -> None:
-        return
+    global BRIDGE
+    options = load_options()
+    api_token = options.get("api_token")
+    alias = options.get("camera_id") or "cabin"
+    idle_timeout = options.get("idle_timeout_seconds", 30)
+    if not isinstance(api_token, str) or not 16 <= len(api_token) <= 1024:
+        set_status(configuration_required=True, camera_ready=False, phase="api_token_required")
+        print("bridge_ready=false configuration_required=api_token", flush=True)
+        return None
+    if not isinstance(alias, str):
+        raise RuntimeError("camera alias is invalid")
+    if not isinstance(idle_timeout, int) or not 10 <= idle_timeout <= 600:
+        raise RuntimeError("idle timeout is invalid")
+    if not device.device_password:
+        raise P2PError("camera device credential was unavailable")
+
+    credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
+    if credentials is None:
+        raise WakeError("official wake configuration was unavailable")
+    client_id = resolve_client_id(device.uid)
+    service_parameter = get_service_parameter(client_id)
+
+    def start_stream() -> subprocess.Popen[bytes]:
+        set_status(phase="waking_camera_on_demand")
+        try:
+            wake = asyncio.run(wake_camera(device.uid, credentials, timeout=12.0))
+            set_status(
+                wake_requested=wake.requested,
+                wake_responsive_servers=wake.responsive_servers,
+                phase="starting_native_stream",
+            )
+        except WakeError:
+            set_status(phase="starting_native_stream")
+        return open_stream_process(
+            str(CONNECT_HELPER),
+            str(LIBRARY),
+            client_id,
+            service_parameter,
+            device.device_password,
+            environment=p2p_environment(),
+        )
+
+    session = NativeStreamSession(start_stream, idle_timeout=float(idle_timeout))
+    bridge = CameraBridge(
+        camera_id=alias,
+        camera_name=device.name,
+        api_token=api_token,
+        session=session,
+        ffmpeg=str(FFMPEG),
+    )
+    with LOCK:
+        BRIDGE = bridge
+    set_status(
+        camera_ready=True,
+        configuration_required=False,
+        phase="bridge_ready",
+        idle_timeout_seconds=idle_timeout,
+    )
+    print("bridge_ready=true camera_count=1", flush=True)
+    return bridge
 
 
 def main() -> int:
-    server = ThreadingHTTPServer(("0.0.0.0", 8099), StatusHandler)
+    server = ThreadingHTTPServer(
+        ("0.0.0.0", 8099), make_handler(get_status, get_bridge)
+    )
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    stop = threading.Event()
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop.set()
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
     try:
         load_vendor_runtime()
         device = enumerate_account()
         if device is not None:
             run_p2p_acceptance(device)
+            configure_bridge(device)
     except Exception as error:
         phase = "startup_error" if STATUS["loader_ready"] else "native_loader_error"
         detail = str(error).replace(" ", "_") if isinstance(error, P2PError) else None
         set_status(phase=phase, error=type(error).__name__, error_detail=detail)
         suffix = f" detail={detail}" if detail else ""
         print(f"startup_ready=false error={type(error).__name__}{suffix}", flush=True)
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        server.shutdown()
+    stop.wait()
+    bridge = get_bridge()
+    if bridge is not None:
+        bridge.session.close()
+    server.shutdown()
+    server.server_close()
     return 0
 
 

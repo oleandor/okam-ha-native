@@ -464,3 +464,38 @@ def run_snapshot_probe(
         width=width,
         height=height,
     )
+
+
+def open_stream_process(
+    helper: str,
+    library: str,
+    uid: str,
+    service_parameter: str,
+    device_password: str,
+    *,
+    environment: dict[str, str],
+) -> subprocess.Popen[bytes]:
+    """Start the graceful raw-H.264 helper with all sensitive input on stdin."""
+
+    stdin = _field(uid) + _field(service_parameter) + _field(device_password)
+    try:
+        process = subprocess.Popen(
+            [helper, library, "--stream-stdout"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            bufsize=0,
+        )
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+        process.stdin.write(stdin)
+        process.stdin.close()
+        process.stdin = None
+        return process
+    except (OSError, subprocess.SubprocessError):
+        if "process" in locals() and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        raise P2PError("native H.264 stream helper failed") from None

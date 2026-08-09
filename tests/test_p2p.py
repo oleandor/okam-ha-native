@@ -9,6 +9,7 @@ from okam_native.p2p import (
     _jpeg_dimensions,
     P2PError,
     get_service_parameter,
+    open_stream_process,
     resolve_client_id,
     run_authentication_probe,
     run_connect_probe,
@@ -175,3 +176,37 @@ def test_jpeg_dimensions_accepts_bounded_sof_header() -> None:
     )
 
     assert _jpeg_dimensions(jpeg) == (640, 480)
+
+
+def test_open_stream_process_keeps_sensitive_fields_out_of_argv(monkeypatch) -> None:
+    recorded = {}
+
+    class Input:
+        def write(self, value):
+            recorded["input"] = value
+
+        def close(self):
+            pass
+
+    class Process:
+        stdin = Input()
+        stdout = object()
+        stderr = object()
+
+    def popen(command, **kwargs):
+        recorded["command"] = command
+        return Process()
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    open_stream_process(
+        "/helper",
+        "/library",
+        "sensitive-device-id",
+        "sensitive-service-parameter",
+        "sensitive-device-password",
+        environment={"SAFE": "1"},
+    )
+
+    assert recorded["command"] == ["/helper", "/library", "--stream-stdout"]
+    assert b"sensitive-device-password" in recorded["input"]
+    assert "sensitive-device-password" not in " ".join(recorded["command"])

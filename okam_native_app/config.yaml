@@ -1,7 +1,7 @@
-name: O-KAM Native Lab
-version: 0.0.7
+name: O-KAM Native Bridge
+version: 0.0.8
 slug: okam_native
-description: ARM64 native-runtime acceptance app for O-KAM cameras
+description: Self-contained native ARM64 O-KAM camera bridge for Home Assistant
 url: https://github.com/oleandor/okam-ha-native
 image: ghcr.io/oleandor/okam-ha-native
 arch:
@@ -19,7 +19,9 @@ ports_description:
 options:
   account_username: null
   account_password: null
+  api_token: null
   camera_id: cabin
+  idle_timeout_seconds: 30
   run_connect_test: false
   run_auth_test: false
   run_stream_test: false
@@ -27,7 +29,9 @@ options:
 schema:
   account_username: email
   account_password: password
+  api_token: password
   camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
+  idle_timeout_seconds: "int(10,600)"
   run_connect_test: bool
   run_auth_test: bool
   run_stream_test: bool
