@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.1
+
+- Refreshes the Home Assistant camera image as soon as native H.264 media
+  becomes ready, preventing the waking-up image from remaining on screen.
+- Reuses the last successful snapshot if a later still-image request briefly
+  fails.
+- Increases the default idle disconnect delay from 30 seconds to 120 seconds so
+  normal page changes can reuse the warm camera connection.
+- Reports the effective runtime idle timeout in camera and readiness status.
+
 ## 1.1.0
 
 - Accepts the normal camera-owner account as well as an account with a shared

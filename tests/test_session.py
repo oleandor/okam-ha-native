@@ -41,6 +41,11 @@ class FakeProcess:
         return self.returncode
 
 
+def test_session_default_keeps_camera_warm_for_two_minutes() -> None:
+    session = NativeStreamSession(lambda: FakeProcess())  # type: ignore[arg-type]
+    assert session.idle_timeout == 120.0
+
+
 def test_session_reuses_process_and_stops_after_last_viewer() -> None:
     process = FakeProcess()
     starts = []

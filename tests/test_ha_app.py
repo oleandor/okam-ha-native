@@ -11,7 +11,8 @@ def test_native_bridge_is_a_prebuilt_arm64_ha_app() -> None:
     assert "boot: auto" in config
     assert "stage: experimental" not in config
     assert "machine:" not in config
-    assert "version: 1.1.0" in config
+    assert "version: 1.1.1" in config
+    assert "idle_timeout_seconds: 120" in config
     assert "account_username: email" in config
     assert "account_password: password" in config
     assert "api_token: password" in config
@@ -50,12 +51,22 @@ def test_repository_contains_camera_integration_for_native_api() -> None:
     manifest = (component / "manifest.json").read_text(encoding="utf-8")
     config_flow = (component / "config_flow.py").read_text(encoding="utf-8")
     camera = (component / "camera.py").read_text(encoding="utf-8")
-    assert '"version": "1.1.0"' in manifest
+    assert '"version": "1.1.1"' in manifest
     assert "http://homeassistant.local:8099" in config_flow
     assert "CameraEntityFeature.STREAM" in camera
     assert "_attr_has_entity_name = False" in camera
     assert "SLEEPING_PLACEHOLDER" in camera
     assert "WAKING_PLACEHOLDER" in camera
+    assert "WAKE_WATCH_SECONDS = 90" in camera
+    assert "self.async_update_token()" in camera
+    assert "self._last_snapshot" in camera
+
+
+def test_integration_uses_two_minute_warm_connection_default() -> None:
+    constants = (ROOT / "custom_components" / "okam" / "const.py").read_text(
+        encoding="utf-8"
+    )
+    assert "DEFAULT_IDLE_TIMEOUT = 120" in constants
 
 
 def test_user_documentation_is_current_and_complete() -> None:

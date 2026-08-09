@@ -164,6 +164,7 @@ def test_bridge_reports_idle_waking_and_streaming_states() -> None:
 
     assert bridge.status()["state"] == "idle"
     assert bridge.status()["media_ready"] is False
+    assert bridge.status()["idle_timeout_seconds"] == 30
     session.running = True
     assert bridge.status()["state"] == "waking"
     session.media_ready = True
