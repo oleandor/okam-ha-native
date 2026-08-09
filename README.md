@@ -8,7 +8,7 @@ demand and forwards its native H.264 stream.
 This is a separate project from
 [`okam-ha-arm64`](https://github.com/oleandor/okam-ha-arm64). Version 0.1.4 of
 that project remains the working compatibility fallback based on the official
-WebViewer. Version 0.0.5 is an installable **native wake/connect/auth acceptance
+WebViewer. Version 0.0.6 is an installable **native wake/connect/auth/H.264 acceptance
 app**, not yet a camera replacement. Version 0.2.0 will
 not be published until the physical camera passes every acceptance gate in
 `docs/acceptance.example.json` on an ARM64 Home Assistant host.
@@ -44,6 +44,9 @@ not be published until the physical camera passes every acceptance gate in
   documented command channel directly. Device identifiers, service parameters,
   and the device password are accepted only through stdin, wiped after use, and
   never included in logs or process arguments.
+- The helper can start the official live channel, validate bounded 32-byte
+  vendor frame headers and Annex-B H.264 NAL units entirely in memory, report
+  only frame counts/byte totals, stop the stream, wipe buffers, and disconnect.
 - Automated tests enforce redaction, archive safety, official wake message
   signing, and the native-release gate.
 
@@ -53,18 +56,20 @@ not be published until the physical camera passes every acceptance gate in
 2. Add `https://github.com/oleandor/okam-ha-native`.
 3. Install **O-KAM Native Lab**.
 4. Configure the secondary/view-only account and alias. Set
-   `run_auth_test: true`, then start the app. This also performs the connect test.
+   `run_stream_test: true`, then start the app. This also performs the connect
+   and authentication tests.
 5. Confirm its log prints `native_loader_ready=true` and
    `account_enumerated=true device_count=1`, followed by
-   `camera_authenticated=true clean_disconnect=true`.
+   `h264_received=true frames=... bytes=... clean_disconnect=true`.
 6. Optionally open `http://HOME_ASSISTANT_IP:8099/ready` and confirm both
-   `loader_ready`, `account_ready`, `p2p_ready`, and `camera_authenticated` are
-   `true`.
+   `loader_ready`, `account_ready`, `p2p_ready`, `camera_authenticated`, and
+   `h264_ready` are `true`.
 
 The lab app intentionally creates no camera entity yet. A green loader result
 proves the Windows-free ARM64 runtime, account enumeration, wake, native P2P
-connect, camera authentication, and clean disconnect on the Pi. H.264
-forwarding remains the next physical-camera gate.
+connect, camera authentication, bounded H.264 receipt, and clean disconnect on
+the Pi. Persistent forwarding, decode/snapshot, and the Home Assistant camera
+entity remain gated.
 
 ## Development sequence
 

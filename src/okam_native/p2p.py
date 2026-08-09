@@ -129,6 +129,17 @@ class AuthenticationResult:
     disconnected: bool
 
 
+@dataclass(frozen=True)
+class StreamProbeResult(AuthenticationResult):
+    stream_start_sent: bool
+    stream_stop_sent: bool
+    h264_received: bool
+    h264_frames: int
+    h264_bytes: int
+    keyframe_seen: bool
+    h265_frames: int
+
+
 def run_connect_probe(
     helper: str,
     library: str,
@@ -222,4 +233,78 @@ def run_authentication_probe(
         login_command=command,
         login_result=result,
         disconnected=payload["disconnected"],
+    )
+
+
+def run_stream_probe(
+    helper: str,
+    library: str,
+    uid: str,
+    service_parameter: str,
+    device_password: str,
+    *,
+    environment: dict[str, str],
+    timeout: float = 125.0,
+) -> StreamProbeResult:
+    """Prove bounded H.264 receipt without persisting or returning frame bytes."""
+
+    stdin = _field(uid) + _field(service_parameter) + _field(device_password)
+    try:
+        completed = subprocess.run(
+            [helper, library, "--stream-test"],
+            input=stdin,
+            capture_output=True,
+            timeout=timeout,
+            env=environment,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise P2PError("native H.264 helper failed") from None
+    try:
+        payload = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise P2PError("native H.264 helper returned an invalid response") from None
+    bool_fields = (
+        "connected",
+        "login_sent",
+        "login_response_received",
+        "authenticated",
+        "stream_start_sent",
+        "stream_stop_sent",
+        "h264_received",
+        "keyframe_seen",
+        "disconnected",
+    )
+    int_fields = (
+        "connect_state",
+        "login_command",
+        "login_result",
+        "h264_frames",
+        "h264_bytes",
+        "h265_frames",
+    )
+    if (
+        any(not isinstance(payload.get(name), bool) for name in bool_fields)
+        or any(not isinstance(payload.get(name), int) for name in int_fields)
+        or any(payload[name] < 0 for name in ("h264_frames", "h264_bytes", "h265_frames"))
+    ):
+        raise P2PError("native H.264 helper returned an invalid result")
+    if completed.returncode not in {0, 4, 5, 6}:
+        raise P2PError("native H.264 helper failed safely")
+    return StreamProbeResult(
+        connected=payload["connected"],
+        connect_state=payload["connect_state"],
+        login_sent=payload["login_sent"],
+        login_response_received=payload["login_response_received"],
+        authenticated=payload["authenticated"],
+        login_command=payload["login_command"],
+        login_result=payload["login_result"],
+        disconnected=payload["disconnected"],
+        stream_start_sent=payload["stream_start_sent"],
+        stream_stop_sent=payload["stream_stop_sent"],
+        h264_received=payload["h264_received"],
+        h264_frames=payload["h264_frames"],
+        h264_bytes=payload["h264_bytes"],
+        keyframe_seen=payload["keyframe_seen"],
+        h265_frames=payload["h265_frames"],
     )

@@ -20,6 +20,7 @@ from okam_native.p2p import (
     resolve_client_id,
     run_authentication_probe,
     run_connect_probe,
+    run_stream_probe,
 )
 from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
 
@@ -38,6 +39,8 @@ STATUS: dict[str, object] = {
     "connect_test_enabled": False,
     "auth_test_enabled": False,
     "camera_authenticated": False,
+    "stream_test_enabled": False,
+    "h264_ready": False,
     "configuration_required": True,
     "phase": "starting",
 }
@@ -151,8 +154,14 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
     options = load_options()
     enabled = options.get("run_connect_test") is True
     auth_enabled = options.get("run_auth_test") is True
-    set_status(connect_test_enabled=enabled or auth_enabled, auth_test_enabled=auth_enabled)
-    if not enabled and not auth_enabled:
+    stream_enabled = options.get("run_stream_test") is True
+    auth_enabled = auth_enabled or stream_enabled
+    set_status(
+        connect_test_enabled=enabled or auth_enabled,
+        auth_test_enabled=auth_enabled,
+        stream_test_enabled=stream_enabled,
+    )
+    if not enabled and not auth_enabled and not stream_enabled:
         return
     if auth_enabled and not device.device_password:
         raise P2PError("camera device credential was unavailable")
@@ -177,7 +186,16 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
             wake_responsive_servers=responsive_servers,
             phase="connecting_p2p",
         )
-        if auth_enabled:
+        if stream_enabled:
+            result = run_stream_probe(
+                str(CONNECT_HELPER),
+                str(LIBRARY),
+                client_id,
+                service_parameter,
+                device.device_password,
+                environment=p2p_environment(),
+            )
+        elif auth_enabled:
             result = run_authentication_probe(
                 str(CONNECT_HELPER),
                 str(LIBRARY),
@@ -203,17 +221,51 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 login_result=result.login_result,
                 clean_disconnect=result.disconnected,
             )
+            if result.authenticated:
+                set_status(p2p_ready=True, camera_authenticated=True)
             if not (result.connected and result.authenticated and result.disconnected):
                 print(
                     "camera_authentication=false "
                     f"connect_state={result.connect_state} "
                     f"login_sent={str(result.login_sent).lower()} "
                     f"login_response_received={str(result.login_response_received).lower()} "
+                    f"login_command={result.login_command} "
                     f"login_result={result.login_result} "
                     f"clean_disconnect={str(result.disconnected).lower()}",
                     flush=True,
                 )
-        if auth_enabled and result.connected and result.authenticated and result.disconnected:
+        if stream_enabled:
+            set_status(
+                stream_start_sent=result.stream_start_sent,
+                stream_stop_sent=result.stream_stop_sent,
+                h264_frames=result.h264_frames,
+                h264_bytes=result.h264_bytes,
+                keyframe_seen=result.keyframe_seen,
+                h265_frames=result.h265_frames,
+            )
+            if result.h264_received and result.disconnected:
+                set_status(
+                    h264_ready=True,
+                    phase="h264_received",
+                    connect_attempt=attempt,
+                )
+                print(
+                    f"h264_received=true frames={result.h264_frames} "
+                    f"bytes={result.h264_bytes} clean_disconnect=true",
+                    flush=True,
+                )
+                return
+            print(
+                "h264_received=false "
+                f"stream_start_sent={str(result.stream_start_sent).lower()} "
+                f"stream_stop_sent={str(result.stream_stop_sent).lower()} "
+                f"frames={result.h264_frames} bytes={result.h264_bytes} "
+                f"keyframe_seen={str(result.keyframe_seen).lower()} "
+                f"h265_frames={result.h265_frames} "
+                f"clean_disconnect={str(result.disconnected).lower()}",
+                flush=True,
+            )
+        if not stream_enabled and auth_enabled and result.connected and result.authenticated and result.disconnected:
             set_status(
                 p2p_ready=True,
                 camera_authenticated=True,
@@ -247,6 +299,7 @@ class StatusHandler(BaseHTTPRequestHandler):
                     payload["account_ready"]
                     and (not payload["connect_test_enabled"] or payload["p2p_ready"])
                     and (not payload["auth_test_enabled"] or payload["camera_authenticated"])
+                    and (not payload["stream_test_enabled"] or payload["h264_ready"])
                 )
             )
             status = 200 if ready else 503

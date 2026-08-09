@@ -11,6 +11,7 @@ from okam_native.p2p import (
     resolve_client_id,
     run_authentication_probe,
     run_connect_probe,
+    run_stream_probe,
 )
 
 
@@ -117,6 +118,46 @@ def test_authentication_probe_passes_all_sensitive_fields_only_on_stdin(monkeypa
     assert result.authenticated is True
     assert result.login_result == 0
     assert recorded["command"] == ["/helper", "/library", "--authenticate"]
+    assert b"sensitive-device-password" in recorded["input"]
+    assert b"sensitive-device-password" not in b" ".join(
+        value.encode() for value in recorded["command"]
+    )
+
+
+def test_stream_probe_returns_only_sanitized_metrics(monkeypatch) -> None:
+    recorded = {}
+
+    def run(command, **kwargs):
+        recorded["command"] = command
+        recorded["input"] = kwargs["input"]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                b'{"connected":true,"connect_state":3,"login_sent":true,'
+                b'"login_response_received":true,"authenticated":true,'
+                b'"login_command":24577,"login_result":0,'
+                b'"stream_start_sent":true,"stream_stop_sent":true,'
+                b'"h264_received":true,"h264_frames":4,"h264_bytes":8192,'
+                b'"keyframe_seen":true,"h265_frames":0,"disconnected":true}\n'
+            ),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    result = run_stream_probe(
+        "/helper",
+        "/library",
+        "sensitive-device-id",
+        "sensitive-service-parameter",
+        "sensitive-device-password",
+        environment={"SAFE": "1"},
+    )
+
+    assert result.h264_received is True
+    assert result.h264_frames == 4
+    assert result.h264_bytes == 8192
+    assert recorded["command"] == ["/helper", "/library", "--stream-test"]
     assert b"sensitive-device-password" in recorded["input"]
     assert b"sensitive-device-password" not in b" ".join(
         value.encode() for value in recorded["command"]
