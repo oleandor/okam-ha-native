@@ -20,13 +20,14 @@ async def async_setup_entry(
 
 
 class OkamCamera(OkamEntity, Camera):
-    _attr_name = None
+    _attr_has_entity_name = False
     _attr_supported_features = CameraEntityFeature.STREAM
 
     def __init__(self, runtime: OkamRuntime) -> None:
         Camera.__init__(self)
         OkamEntity.__init__(self, runtime.coordinator)
         self._api = runtime.api
+        self._attr_name = runtime.coordinator.camera_id
         self._attr_unique_id = f"{runtime.coordinator.camera_id}_camera"
 
     async def async_camera_image(self, width=None, height=None) -> bytes | None:

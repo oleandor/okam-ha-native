@@ -1,9 +1,12 @@
 {
   "domain": "okam",
   "name": "O-KAM Native Bridge",
-  "version": "0.0.8",
+  "version": "1.0.0",
   "config_flow": true,
   "iot_class": "local_polling",
   "integration_type": "hub",
-  "requirements": []
+  "requirements": [],
+  "documentation": "https://github.com/oleandor/okam-ha-native#readme",
+  "issue_tracker": "https://github.com/oleandor/okam-ha-native/issues",
+  "codeowners": ["@oleandor"]
 }

@@ -1,0 +1,30 @@
+configuration:
+  account_username:
+    name: Secondary O-KAM account email
+    description: Email address of the account containing exactly one shared camera.
+  account_password:
+    name: Secondary O-KAM account password
+    description: Password for the secondary view-only O-KAM account.
+  api_token:
+    name: Local API token
+    description: A random secret of at least 16 characters that you create and also enter in the Home Assistant integration.
+  camera_id:
+    name: Camera alias
+    description: Local Home Assistant name for the camera, for example cabin.
+  idle_timeout_seconds:
+    name: Idle disconnect delay
+    description: Seconds to wait after the final viewer closes before stopping and disconnecting the camera.
+  run_connect_test:
+    name: Run connection diagnostic
+    description: Perform a bounded P2P connection test when the app starts. Leave disabled for normal use.
+  run_auth_test:
+    name: Run authentication diagnostic
+    description: Perform a bounded camera-login test when the app starts. Leave disabled for normal use.
+  run_stream_test:
+    name: Run H.264 diagnostic
+    description: Receive a bounded native H.264 sample when the app starts. Leave disabled for normal use.
+  run_snapshot_test:
+    name: Run complete snapshot diagnostic
+    description: Wake, connect, authenticate, receive H.264, create one JPEG, and disconnect when the app starts. Leave disabled for normal use.
+network:
+  8099/tcp: Local bridge API used by the Home Assistant integration

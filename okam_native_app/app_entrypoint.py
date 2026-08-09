@@ -37,7 +37,7 @@ CONNECT_HELPER = Path("/opt/okam/okam-hybris-connect")
 FFMPEG = Path("/usr/bin/ffmpeg")
 LIBRARY = VENDOR / "libOKSMARTPPCS.so"
 STATUS: dict[str, object] = {
-    "service": "okam-native-lab",
+    "service": "okam-native-bridge",
     "loader_ready": False,
     "account_ready": False,
     "p2p_ready": False,
