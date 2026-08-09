@@ -96,7 +96,7 @@ ARG BUILD_ARCH=aarch64
 LABEL io.hass.version=$BUILD_VERSION \
       io.hass.arch=$BUILD_ARCH \
       io.hass.type="app" \
-      io.hass.name="O-KAM Native Lab"
+      io.hass.name="O-KAM Native Bridge"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \

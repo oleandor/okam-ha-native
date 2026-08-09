@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .pytest-tmp/
 .pytest-*/
+.testdeps/
 .coverage
 build/
 dist/

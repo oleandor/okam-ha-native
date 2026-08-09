@@ -8,8 +8,9 @@ standard FFmpeg decoder only when a JPEG snapshot is requested.
 This is a separate project from
 [`okam-ha-arm64`](https://github.com/oleandor/okam-ha-arm64). Version 0.1.4 of
 that project remains the working compatibility fallback based on the official
-WebViewer. Version 0.0.7 is an installable **native H.264/JPEG acceptance
-app**, not yet a camera replacement. Version 0.2.0 will
+WebViewer. Version 0.0.8 adds the first installable **native on-demand camera
+bridge** and an API compatible with the existing O-KAM Home Assistant
+integration. It is a physical test release; version 0.2.0 will
 not be published until the physical camera passes every acceptance gate in
 `docs/acceptance.example.json` on an ARM64 Home Assistant host.
 
@@ -52,13 +53,19 @@ not be published until the physical camera passes every acceptance gate in
   clean disconnect without persisting camera imagery.
 - Automated tests enforce redaction, archive safety, official wake message
   signing, and the native-release gate.
+- A token-authenticated compatibility API exposes device discovery, status,
+  on-demand snapshots, and a raw H.264 source on port 8099. One native camera
+  connection is shared between viewers and shuts down after the last viewer's
+  idle timeout.
 
 ## Test the native runtime in Home Assistant
 
 1. Open **Settings > Apps > App store > Repositories**.
 2. Add `https://github.com/oleandor/okam-ha-native`.
 3. Install **O-KAM Native Lab**.
-4. Configure the secondary/view-only account and alias. Set
+4. Configure the secondary/view-only account and alias. Enter a random
+   `api_token` of at least 16 characters. This is a local bridge secret you
+   choose, not an O-KAM token or password. Set
    `run_snapshot_test: true`, then start the app. This also performs the wake,
    connect, authentication, and H.264 tests.
 5. Confirm its log prints `native_loader_ready=true` and
@@ -67,12 +74,23 @@ not be published until the physical camera passes every acceptance gate in
 6. Optionally open `http://HOME_ASSISTANT_IP:8099/ready` and confirm both
    `loader_ready`, `account_ready`, `p2p_ready`, `camera_authenticated`, and
    `h264_ready` and `snapshot_ready` are `true`.
+7. Turn `run_snapshot_test` off again, restart the app, and enable **Start on
+   boot**.
+8. If the earlier **O-KAM Bridge** integration is already installed, keep it.
+   Otherwise add this same repository to HACS as a custom **Integration**,
+   install **O-KAM Native Bridge**, and restart Home Assistant. Without HACS,
+   copy `custom_components/okam` to `/config/custom_components/okam` using
+   Studio Code Server or Samba, then restart Home Assistant.
+9. Add or reconfigure **O-KAM Native Bridge** with bridge URL
+   `http://HOME_ASSISTANT_IP:8099`, the same `api_token`, and camera ID `cabin`.
+   Remove and add the existing entry again if it still points at the Windows
+   bridge and your Home Assistant version does not show **Reconfigure**.
 
-The lab app intentionally creates no camera entity yet. A green loader result
-proves the Windows-free ARM64 runtime, account enumeration, wake, native P2P
-connect, camera authentication, bounded H.264 receipt, single-frame JPEG decode,
-and clean disconnect on the Pi. Persistent on-demand reuse and the Home
-Assistant camera entity remain gated.
+The integration should create `camera.cabin` unless that entity ID is already
+in use. Live view can remain blank for 20-30 seconds while the battery camera
+wakes. Snapshots and live view share one native connection; after the last
+viewer leaves, the app stops the camera stream and disconnects cleanly after
+`idle_timeout_seconds` (30 seconds by default).
 
 ## Development sequence
 
@@ -147,9 +165,9 @@ from actual Pi/camera test results, and run:
 okam-acceptance acceptance.local.json
 ```
 
-The future Home Assistant app and integration are added here only after the
-native service passes enumeration, wake, H.264 receive/decode, snapshot, idle
-disconnect, clean shutdown, and ARM64-only runtime checks.
+The stable 0.2.0 release remains gated on physical Home Assistant validation of
+the compatibility API, live view, repeated snapshots, idle disconnect, clean
+app shutdown, and recovery after a sleeping or temporarily offline camera.
 
 ## Security and licensing
 

@@ -1,4 +1,4 @@
-name: Publish native lab image
+name: Publish native bridge image
 
 on:
   push:
