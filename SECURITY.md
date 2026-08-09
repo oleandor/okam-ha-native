@@ -1,14 +1,34 @@
 # Security policy
 
-- Never commit account names, passwords, tokens, cookies, full camera IDs,
-  wake signing values, packet captures, media, vendor binaries, or raw traces.
-- Supply account secrets through the operating system secret store or Home
-  Assistant app options, never command-line arguments.
-- Vendor artifacts must match `docs/vendor-artifacts.json` before extraction.
-- The tracer writes sanitized JSONL only. Treat even sanitized traces as local
-  development artifacts under ignored `captures/`.
-- The bridge exposes no public inbound port. Home Assistant reaches it over the
-  private app network and all vendor connections are outbound.
+## Supported versions
 
-If a secret is accidentally committed, revoke/rotate it before rewriting
-history. Do not rely on history rewriting as revocation.
+Security fixes are provided for the latest published release.
+
+## Reporting a vulnerability
+
+Report vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/oleandor/okam-ha-native/security/advisories/new).
+Do not open a public issue for an undisclosed vulnerability.
+
+## Credential safety
+
+- Use a secondary O-KAM account containing only the camera intended for Home
+  Assistant.
+- Use a unique random local API token of at least 16 characters.
+- Never post account names, passwords, API tokens, camera identifiers, packet
+  captures, media, or unredacted logs.
+- Rotate a password or token immediately if it may have been disclosed.
+- Supply secrets only through Home Assistant app options.
+
+## Network safety
+
+- Keep TCP port 8099 on the trusted local network.
+- Do not port-forward the bridge or expose it through a public reverse proxy.
+- Camera API routes require bearer authentication. The liveness and readiness
+  routes intentionally expose only non-secret operational state.
+
+## Supply chain
+
+Vendor artifacts are downloaded from a fixed official source and verified
+against pinned checksums before use. They are not committed to this repository
+or embedded in the published source archive.

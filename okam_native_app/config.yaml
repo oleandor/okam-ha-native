@@ -1,5 +1,5 @@
 name: O-KAM Native Bridge
-version: 0.0.8
+version: 1.0.0
 slug: okam_native
 description: Self-contained native ARM64 O-KAM camera bridge for Home Assistant
 url: https://github.com/oleandor/okam-ha-native
@@ -8,9 +8,9 @@ arch:
   - aarch64
 machine:
   - raspberrypi4-64
+  - raspberrypi5-64
 startup: application
-boot: manual
-stage: experimental
+boot: auto
 watchdog: http://[HOST]:[PORT:8099]/health
 ports:
   8099/tcp: 8099

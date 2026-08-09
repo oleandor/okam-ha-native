@@ -1,180 +1,207 @@
-# O-KAM Native Bridge
+# O-KAM Native Bridge for Home Assistant
 
-Experimental work toward a small, self-contained O-KAM Pro camera bridge for
-Home Assistant OS on Raspberry Pi 4 or newer. The target contains no Wine,
-WebViewer, Xvfb, or desktop. It copies the camera's native H.264 and uses the
-standard FFmpeg decoder only when a JPEG snapshot is requested.
+O-KAM Native Bridge connects an O-KAM Pro camera directly to Home Assistant on
+a 64-bit Raspberry Pi. Live video, snapshots, camera wake-up, and disconnects
+are handled locally by the Pi; no additional computer or phone connection is
+required during normal operation.
 
-This is a separate project from
-[`okam-ha-arm64`](https://github.com/oleandor/okam-ha-arm64). Version 0.1.4 of
-that project remains the working compatibility fallback based on the official
-WebViewer. Version 0.0.8 adds the first installable **native on-demand camera
-bridge** and an API compatible with the existing O-KAM Home Assistant
-integration. It is a physical test release; version 0.2.0 will
-not be published until the physical camera passes every acceptance gate in
-`docs/acceptance.example.json` on an ARM64 Home Assistant host.
+The project contains both required parts:
 
-## What is working today
+- **O-KAM Native Bridge app** — connects to the camera and provides the local
+  authenticated media API.
+- **O-KAM Native Bridge integration** — creates the Home Assistant camera
+  entity, including live view and snapshots.
 
-- The native Python wake client has already received the physical camera's
-  activation state through both official low-power wake directories.
-- The official Windows helper has already yielded H.264 at 2304x1296, and the
-  stream decoded and produced a valid snapshot.
-- A fail-closed Windows tracer now records DLL call order, opaque object
-  relationships, scalar/pointer shapes, and the non-zero layout of the P2P
-  connection structure. It never writes raw process memory or strings.
-- A tiny 32-bit console probe loads `P2PAPI.dll`, inventories the required
-  exports, reports the API version, and proves device-DLL init/teardown without
-  opening a camera connection. An explicit physical-stream mode implements the
-  captured connection/start/raw-H.264/stop sequence; its first connection trial
-  timed out while the vendor wake service was also unreachable, so it is not
-  yet an accepted stream path.
-- The official ARM64 AAR can be extracted from a checksum-pinned vendor SDK,
-  inspected for required PPCS/JNI symbols, and load-tested through a pinned
-  libhybris build with a 3.4 MB checksum-pinned AOSP Bionic closure. The real
-  library loaded and every required PPCS/JNI symbol resolved on ARM64.
-- The secondary account is enumerated directly through the official fixed-host
-  HTTPS flow. A real view-only account returned exactly one shared camera
-  without WebViewer; identifiers, tokens, and credentials remain out of logs.
-- The official virtual-device resolver and P2P service directory are reproduced
-  with fixed HTTPS origins. The physical camera accepted a real ARM64 native
-  connection (`ONLINE`, state 3) and the helper immediately disconnected it
-  cleanly under ARM64 emulation. The same gate is now opt-in for validation on
-  the physical Raspberry Pi.
-- The native helper sends the SDK's official `admin` login request and reads the
-  documented command channel directly. Device identifiers, service parameters,
-  and the device password are accepted only through stdin, wiped after use, and
-  never included in logs or process arguments.
-- The helper can start the official live channel, validate bounded 32-byte
-  vendor frame headers and Annex-B H.264 NAL units entirely in memory, report
-  only frame counts/byte totals, stop the stream, wipe buffers, and disconnect.
-- Its graceful stdout mode can feed native H.264 directly to FFmpeg, decode one
-  JPEG entirely in memory, close the pipe, stop the camera stream, and verify a
-  clean disconnect without persisting camera imagery.
-- Automated tests enforce redaction, archive safety, official wake message
-  signing, and the native-release gate.
-- A token-authenticated compatibility API exposes device discovery, status,
-  on-demand snapshots, and a raw H.264 source on port 8099. One native camera
-  connection is shared between viewers and shuts down after the last viewer's
-  idle timeout.
+## Features
 
-## Test the native runtime in Home Assistant
+- Native ARM64 operation on Raspberry Pi 4 and Raspberry Pi 5
+- Live H.264 video in Home Assistant
+- Full-resolution JPEG snapshots
+- Automatic wake-up for battery cameras
+- One camera connection shared by simultaneous viewers
+- Automatic stream stop and clean disconnect after the last viewer leaves
+- User-created API token protecting the local bridge
+- No transcoding during live view
+- No vendor identifiers, account tokens, or passwords exposed by the status API
 
-1. Open **Settings > Apps > App store > Repositories**.
-2. Add `https://github.com/oleandor/okam-ha-native`.
-3. Install **O-KAM Native Lab**.
-4. Configure the secondary/view-only account and alias. Enter a random
-   `api_token` of at least 16 characters. This is a local bridge secret you
-   choose, not an O-KAM token or password. Set
-   `run_snapshot_test: true`, then start the app. This also performs the wake,
-   connect, authentication, and H.264 tests.
-5. Confirm its log prints `native_loader_ready=true` and
-   `account_enumerated=true device_count=1`, followed by
-   `snapshot_created=true width=... height=... bytes=... clean_disconnect=true`.
-6. Optionally open `http://HOME_ASSISTANT_IP:8099/ready` and confirm both
-   `loader_ready`, `account_ready`, `p2p_ready`, `camera_authenticated`, and
-   `h264_ready` and `snapshot_ready` are `true`.
-7. Turn `run_snapshot_test` off again, restart the app, and enable **Start on
-   boot**.
-8. If the earlier **O-KAM Bridge** integration is already installed, keep it.
-   Otherwise add this same repository to HACS as a custom **Integration**,
-   install **O-KAM Native Bridge**, and restart Home Assistant. Without HACS,
-   copy `custom_components/okam` to `/config/custom_components/okam` using
-   Studio Code Server or Samba, then restart Home Assistant.
-9. Add or reconfigure **O-KAM Native Bridge** with bridge URL
-   `http://HOME_ASSISTANT_IP:8099`, the same `api_token`, and camera ID `cabin`.
-   Remove and add the existing entry again if it still points at the Windows
-   bridge and your Home Assistant version does not show **Reconfigure**.
+## Requirements
 
-The integration should create `camera.cabin` unless that entity ID is already
-in use. Live view can remain blank for 20-30 seconds while the battery camera
-wakes. Snapshots and live view share one native connection; after the last
-viewer leaves, the app stops the camera stream and disconnects cleanly after
-`idle_timeout_seconds` (30 seconds by default).
+- Raspberry Pi 4 or Raspberry Pi 5 running 64-bit Home Assistant OS
+- An O-KAM Pro camera that works in the O-KAM mobile app
+- A secondary O-KAM account containing exactly one camera shared from the
+  camera owner's account
+- HACS for the easiest integration installation, or access to
+  `/config/custom_components` for manual installation
 
-## Development sequence
+## Installation
 
-### 1. Capture the proven Windows ABI
+### 1. Prepare a secondary O-KAM account
 
-Do this only on the development PC where the official WebViewer and the
-existing bridge already work:
+The bridge deliberately uses a secondary, view-only account instead of the
+camera owner's main account.
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\pip install -e ".[trace,test]"
-.\.venv\Scripts\python tools\trace_webviewer.py --seconds 120
+1. Create or choose a second O-KAM account.
+2. Sign in to the camera owner's account in the O-KAM app.
+3. Share the camera with the secondary account.
+4. Sign in as the secondary account and verify that live view works.
+5. Make sure this account contains exactly one shared camera.
+
+Keep the secondary account username and password available for the app
+configuration. Do not enter the primary account credentials in the bridge.
+
+### 2. Install the O-KAM Native Bridge app
+
+1. In Home Assistant, open **Settings → Apps → App store**.
+2. Open the app-store menu and select **Repositories**.
+3. Add this repository:
+
+   ```text
+   https://github.com/oleandor/okam-ha-native
+   ```
+
+4. Find and install **O-KAM Native Bridge**.
+5. Open its **Configuration** tab and enter:
+
+   | Option | What to enter |
+   | --- | --- |
+   | `account_username` | Email address of the secondary O-KAM account |
+   | `account_password` | Password of the secondary O-KAM account |
+   | `api_token` | A new random secret of at least 16 characters that you choose |
+   | `camera_id` | Local camera alias, for example `cabin` |
+   | `idle_timeout_seconds` | `30` is recommended |
+
+   Leave all four `run_*_test` options disabled during normal operation.
+
+6. Save the configuration and start the app. It is configured to start
+   automatically with Home Assistant.
+7. Open the app log and confirm that it contains:
+
+   ```text
+   native_loader_ready=true
+   account_enumerated=true device_count=1
+   bridge_ready=true camera_count=1
+   ```
+
+The API token is a local secret created by you. It is not supplied by O-KAM and
+must not be the O-KAM account password. You will enter the same token in the
+integration.
+
+### 3. Install the Home Assistant integration
+
+#### Recommended: HACS
+
+1. Open **HACS** in Home Assistant.
+2. Add `https://github.com/oleandor/okam-ha-native` as a custom repository of
+   type **Integration**.
+3. Find and install **O-KAM Native Bridge**.
+4. Restart Home Assistant when HACS asks you to.
+
+#### Manual installation
+
+1. Copy this repository's `custom_components/okam` directory to:
+
+   ```text
+   /config/custom_components/okam
+   ```
+
+2. Restart Home Assistant.
+
+### 4. Add the integration
+
+1. Open **Settings → Devices & services**.
+2. Select **Add integration** and search for **O-KAM Native Bridge**.
+3. Enter the following values:
+
+   | Field | Value |
+   | --- | --- |
+   | Bridge URL | `http://HOME_ASSISTANT_LAN_IP:8099` |
+   | API token | The same local token configured in the app |
+   | Camera ID | The `camera_id` configured in the app, such as `cabin` |
+   | Idle timeout | `30` seconds is recommended |
+   | Status refresh interval | `900` seconds is recommended |
+
+Use the actual LAN address of Home Assistant, for example
+`http://192.168.1.20:8099`. Do not use `localhost`.
+
+For a new installation with the alias `cabin`, Home Assistant creates
+`camera.cabin`. If an entity with that ID already exists, Home Assistant may add
+a numeric suffix; its entity ID can be changed from the entity settings.
+
+## Daily use
+
+Open the camera entity or add it to a dashboard using a camera card. A sleeping
+battery camera can take 20–30 seconds to wake before the picture appears.
+
+Live view uses the camera's native H.264 stream. Multiple viewers share the
+same connection. When the final viewer closes, the bridge waits for the
+configured idle timeout, stops the stream, and disconnects from the camera.
+
+## Updating
+
+- Update the **app** from **Settings → Apps**.
+- Update the **integration** from HACS.
+- Restart Home Assistant after an integration update.
+
+The two components use the same release version.
+
+## Diagnostics
+
+The app exposes two local status endpoints:
+
+- `http://HOME_ASSISTANT_LAN_IP:8099/health` — service liveness
+- `http://HOME_ASSISTANT_LAN_IP:8099/ready` — bridge and stream state
+
+During normal idle operation, `/ready` should report:
+
+```json
+{
+  "camera_ready": true,
+  "phase": "bridge_ready",
+  "stream_running": false,
+  "stream_viewers": 0
+}
 ```
 
-While the tracer is active, request live view once through the existing local
-bridge and then stop it normally. The output is written beneath ignored
-`captures/`. Produce a safe summary with:
+While Home Assistant is displaying live video, it reports `phase: streaming`,
+`stream_running: true`, and at least one viewer.
 
-```powershell
-.\.venv\Scripts\python tools\summarize_trace.py captures\webviewer-p2p.jsonl
-```
+See [Troubleshooting](docs/troubleshooting.md) for common setup and connection
+problems.
 
-For this repository's original development machine, the credential-safe driver
-can perform that one session in a second terminal while the tracer is active:
+## Uninstalling
 
-```powershell
-.\.venv\Scripts\python tools\drive_windows_trace.py --live-seconds 35
-```
+1. Remove **O-KAM Native Bridge** from **Settings → Devices & services**.
+2. Stop and uninstall the **O-KAM Native Bridge** app.
+3. Optionally remove the custom repositories from HACS and the app store.
+4. Remove the camera share or secondary O-KAM account if it is no longer needed.
 
-Do not publish the trace even though it is sanitized. The summary is sufficient
-for implementing and reviewing function signatures.
+## Security
 
-### 2. Build the non-GUI Windows probe
+- Use only a secondary O-KAM account with one shared camera.
+- Keep the O-KAM password and local API token private.
+- Do not expose or port-forward TCP port 8099 to the internet.
+- Rotate the local API token if it is accidentally disclosed.
+- Logs and issue reports must not contain credentials, tokens, or camera IDs.
 
-With a 32-bit MinGW toolchain:
+See [SECURITY.md](SECURITY.md) for the complete security policy.
 
-```powershell
-cmake -S native\windows_probe -B build\windows -G "MinGW Makefiles"
-cmake --build build\windows
-build\windows\okam-windows-probe.exe "C:\Program Files (x86)\IP Camera Web Service\925\P2PAPI.dll"
-```
+## Technical overview
 
-The current probe is intentionally read-only. Connection, callback, start,
-stop, and teardown calls are added in that order only after their calling
-conventions and structures appear in the sanitized trace.
+The app enumerates the shared camera through the fixed official account
+service, wakes it through the official low-power service, and opens the camera's
+native ARM64 P2P transport. H.264 is forwarded directly to Home Assistant.
+FFmpeg is invoked only when a JPEG snapshot is requested. Vendor runtime files
+are downloaded from their pinned official source and verified before use.
 
-### 3. Inspect the official ARM64 library
+More detail is available in [Architecture](docs/architecture.md).
 
-No vendor binary is stored in Git. Fetch the pinned official SDK and extract
-only its ARM64 P2P library and its vendor logging dependency:
+## Support and license
 
-```bash
-python -m pip install -e '.[inspect]'
-python tools/fetch_official_sdk.py
-python tools/inspect_arm64_sdk.py .vendor/arm64
-```
+Open an issue at
+[github.com/oleandor/okam-ha-native/issues](https://github.com/oleandor/okam-ha-native/issues)
+with the app version, Raspberry Pi model, Home Assistant version, app log, and
+the redacted `/ready` response. Never include passwords, API tokens, or camera
+identifiers.
 
-The library targets Android/Bionic. `native/arm64_probe` must be compiled and
-run inside a matching minimal Bionic runtime. A glibc `dlopen` failure is not a
-camera failure and must not be hidden by guessed ABI stubs.
-
-The runtime uses only libhybris-common, a checksum-pinned minimal AOSP Bionic
-closure, and two measured leaf dependency stubs. It does not ship an Android
-container, emulator, framework, GUI, or Java runtime.
-
-### 4. Physical release acceptance
-
-Copy `docs/acceptance.example.json` to ignored `acceptance.local.json`, fill it
-from actual Pi/camera test results, and run:
-
-```bash
-okam-acceptance acceptance.local.json
-```
-
-The stable 0.2.0 release remains gated on physical Home Assistant validation of
-the compatibility API, live view, repeated snapshots, idle disconnect, clean
-app shutdown, and recovery after a sleeping or temporarily offline camera.
-
-## Security and licensing
-
-This project uses only a secondary, view-only O-KAM account. Secrets must come
-from the OS secret store or Home Assistant app options; never place them in a
-command, trace, source file, issue, or CI variable. See `SECURITY.md`.
-
-The bridge source is MIT licensed. The vendor SDK remains subject to its own
-terms and is downloaded from the official pinned URL during development/build;
-it is not redistributed by this repository.
+The bridge source is MIT licensed. Vendor components remain subject to their
+own terms and are not stored in this repository.

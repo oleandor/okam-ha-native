@@ -1,46 +1,76 @@
 # O-KAM Native Bridge
 
-This app runs the lightweight native ARM64 O-KAM camera bridge on a Raspberry
-Pi 4 or newer. It does not use Wine, Box64, WebViewer, GTK, Xvfb, a phone, or a
-separate computer. H.264 is copied directly from the camera; FFmpeg is invoked
-only when Home Assistant asks for a JPEG snapshot.
+O-KAM Native Bridge connects one shared O-KAM Pro camera directly to Home
+Assistant on a 64-bit Raspberry Pi 4 or Raspberry Pi 5. It provides live H.264
+video, JPEG snapshots, automatic camera wake-up, shared viewing, and automatic
+idle disconnect.
 
-In **Configuration**, enter the secondary/view-only O-KAM account, choose a
-local alias such as `cabin`, and enter your own random `api_token` of at least
-16 characters. You will enter this same API token in the Home Assistant O-KAM
-integration. It is not the O-KAM password.
+## Before configuring the app
 
-The normal operational settings leave all four `run_*_test` options off. Set
-`run_snapshot_test` to `true` only for a complete bounded diagnostic. It wakes the
-camera, connects and authenticates through native P2P, receives H.264, decodes
-one JPEG in memory, and disconnects. It tries up to three times because this
-battery camera can need 20-30 seconds to wake.
+Create a secondary O-KAM account and share exactly one camera to it from the
+camera owner's account. Sign in as the secondary account in the O-KAM app once
+and confirm that live view works.
 
-Start the app and open its log. A successful first-stage test prints:
+## Configuration
+
+| Option | Description |
+| --- | --- |
+| `account_username` | Email address of the secondary O-KAM account |
+| `account_password` | Password of the secondary O-KAM account |
+| `api_token` | A random local secret of at least 16 characters chosen by you |
+| `camera_id` | Home Assistant camera alias, for example `cabin` |
+| `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `30` is recommended |
+
+The API token is not an O-KAM credential. Create a new random value and enter
+the identical value when adding the Home Assistant integration.
+
+Leave `run_connect_test`, `run_auth_test`, `run_stream_test`, and
+`run_snapshot_test` disabled during normal operation. They are bounded
+diagnostic checks intended only for troubleshooting.
+
+## Starting the app
+
+Save the configuration and start the app. Automatic startup is enabled by
+default. A successful startup log contains:
 
 ```text
 native_loader_ready=true
 account_enumerated=true device_count=1
-snapshot_created=true width=... height=... bytes=... clean_disconnect=true
 bridge_ready=true camera_count=1
 ```
 
-You can also open `http://HOME_ASSISTANT_IP:8099/ready`. The response reports
-`loader_ready: true` after the official O-KAM ARM64 library and all required
-PPCS/JNI symbols have loaded on the Pi. With account options configured, it also
-reports `account_ready: true`, `device_count: 1`, and your local alias. It never
-returns the vendor UID, account token, or any password.
+The readiness page is available at:
 
-With `run_snapshot_test: true`, a successful result reports `p2p_ready: true`,
-`camera_authenticated: true`, `h264_ready: true`, and `snapshot_ready: true`.
-The status endpoint remains unready if any enabled gate cannot complete.
+```text
+http://HOME_ASSISTANT_LAN_IP:8099/ready
+```
 
-For normal use, turn the diagnostic option off again and enable **Start on
-boot**. Configure the O-KAM integration with bridge URL
-`http://HOME_ASSISTANT_IP:8099`, the same API token, and camera ID `cabin`.
-Home Assistant will create `camera.cabin` unless that entity ID is already in
-use. Opening live view wakes the camera on demand, which can take 20-30 seconds.
-The native stream is shared by simultaneous viewers and is stopped after the
-configured idle timeout when the last viewer disconnects.
+It should report `camera_ready: true` and `phase: bridge_ready` while idle.
 
-Do not expose port 8099 to the internet.
+## Home Assistant integration
+
+Install **O-KAM Native Bridge** from HACS using
+`https://github.com/oleandor/okam-ha-native` as a custom integration repository.
+Restart Home Assistant, then add the integration from **Settings → Devices &
+services**.
+
+Use:
+
+- Bridge URL: `http://HOME_ASSISTANT_LAN_IP:8099`
+- API token: the value configured above
+- Camera ID: the configured alias, such as `cabin`
+- Idle timeout: `30`
+
+Do not use `localhost` for the bridge URL. With the `cabin` alias, a new
+installation creates `camera.cabin` unless that entity ID is already occupied.
+
+## Operation
+
+A sleeping camera can take 20–30 seconds to wake. Multiple viewers share one
+camera connection. After the final viewer closes, the bridge stops and
+disconnects after the configured idle timeout.
+
+Do not expose TCP port 8099 to the internet. See the repository
+[README](https://github.com/oleandor/okam-ha-native#readme) and
+[troubleshooting guide](https://github.com/oleandor/okam-ha-native/blob/main/docs/troubleshooting.md)
+for complete installation and support information.
