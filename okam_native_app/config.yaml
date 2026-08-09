@@ -1,5 +1,5 @@
 name: O-KAM Native Lab
-version: 0.0.4
+version: 0.0.5
 slug: okam_native
 description: ARM64 native-runtime acceptance app for O-KAM cameras
 url: https://github.com/oleandor/okam-ha-native
@@ -21,8 +21,10 @@ options:
   account_password: null
   camera_id: cabin
   run_connect_test: false
+  run_auth_test: false
 schema:
   account_username: email
   account_password: password
   camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
   run_connect_test: bool
+  run_auth_test: bool

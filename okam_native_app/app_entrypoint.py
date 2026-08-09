@@ -18,6 +18,7 @@ from okam_native.p2p import (
     P2PError,
     get_service_parameter,
     resolve_client_id,
+    run_authentication_probe,
     run_connect_probe,
 )
 from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
@@ -35,6 +36,8 @@ STATUS: dict[str, object] = {
     "p2p_ready": False,
     "camera_ready": False,
     "connect_test_enabled": False,
+    "auth_test_enabled": False,
+    "camera_authenticated": False,
     "configuration_required": True,
     "phase": "starting",
 }
@@ -147,9 +150,12 @@ def p2p_environment() -> dict[str, str]:
 def run_p2p_acceptance(device: AccountDevice) -> None:
     options = load_options()
     enabled = options.get("run_connect_test") is True
-    set_status(connect_test_enabled=enabled)
-    if not enabled:
+    auth_enabled = options.get("run_auth_test") is True
+    set_status(connect_test_enabled=enabled or auth_enabled, auth_test_enabled=auth_enabled)
+    if not enabled and not auth_enabled:
         return
+    if auth_enabled and not device.device_password:
+        raise P2PError("camera device credential was unavailable")
     credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
     if credentials is None:
         raise WakeError("official wake configuration was unavailable")
@@ -171,15 +177,54 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
             wake_responsive_servers=responsive_servers,
             phase="connecting_p2p",
         )
-        result = run_connect_probe(
-            str(CONNECT_HELPER),
-            str(LIBRARY),
-            client_id,
-            service_parameter,
-            environment=p2p_environment(),
-        )
+        if auth_enabled:
+            result = run_authentication_probe(
+                str(CONNECT_HELPER),
+                str(LIBRARY),
+                client_id,
+                service_parameter,
+                device.device_password,
+                environment=p2p_environment(),
+            )
+        else:
+            result = run_connect_probe(
+                str(CONNECT_HELPER),
+                str(LIBRARY),
+                client_id,
+                service_parameter,
+                environment=p2p_environment(),
+            )
         last_state = result.connect_state
-        if result.connected and result.disconnected:
+        if auth_enabled:
+            set_status(
+                connect_state=result.connect_state,
+                login_sent=result.login_sent,
+                login_response_received=result.login_response_received,
+                login_result=result.login_result,
+                clean_disconnect=result.disconnected,
+            )
+            if not (result.connected and result.authenticated and result.disconnected):
+                print(
+                    "camera_authentication=false "
+                    f"connect_state={result.connect_state} "
+                    f"login_sent={str(result.login_sent).lower()} "
+                    f"login_response_received={str(result.login_response_received).lower()} "
+                    f"login_result={result.login_result} "
+                    f"clean_disconnect={str(result.disconnected).lower()}",
+                    flush=True,
+                )
+        if auth_enabled and result.connected and result.authenticated and result.disconnected:
+            set_status(
+                p2p_ready=True,
+                camera_authenticated=True,
+                phase="camera_authenticated",
+                connect_attempt=attempt,
+                login_command=result.login_command,
+                login_result=result.login_result,
+            )
+            print("camera_authenticated=true clean_disconnect=true", flush=True)
+            return
+        if not auth_enabled and result.connected and result.disconnected:
             set_status(p2p_ready=True, phase="p2p_connected", connect_attempt=attempt)
             print("p2p_connected=true clean_disconnect=true", flush=True)
             return
@@ -201,6 +246,7 @@ class StatusHandler(BaseHTTPRequestHandler):
                 or (
                     payload["account_ready"]
                     and (not payload["connect_test_enabled"] or payload["p2p_ready"])
+                    and (not payload["auth_test_enabled"] or payload["camera_authenticated"])
                 )
             )
             status = 200 if ready else 503

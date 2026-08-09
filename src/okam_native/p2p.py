@@ -117,6 +117,18 @@ class ConnectResult:
     disconnected: bool
 
 
+@dataclass(frozen=True)
+class AuthenticationResult:
+    connected: bool
+    connect_state: int
+    login_sent: bool
+    login_response_received: bool
+    authenticated: bool
+    login_command: int | None
+    login_result: int | None
+    disconnected: bool
+
+
 def run_connect_probe(
     helper: str,
     library: str,
@@ -152,3 +164,62 @@ def run_connect_probe(
     if completed.returncode not in {0, 4}:
         raise P2PError("native P2P helper failed safely")
     return ConnectResult(connected=connected, connect_state=state, disconnected=disconnected)
+
+
+def run_authentication_probe(
+    helper: str,
+    library: str,
+    uid: str,
+    service_parameter: str,
+    device_password: str,
+    *,
+    environment: dict[str, str],
+    timeout: float = 75.0,
+) -> AuthenticationResult:
+    """Connect and prove camera-level login without placing secrets in argv."""
+
+    stdin = _field(uid) + _field(service_parameter) + _field(device_password)
+    try:
+        completed = subprocess.run(
+            [helper, library, "--authenticate"],
+            input=stdin,
+            capture_output=True,
+            timeout=timeout,
+            env=environment,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise P2PError("native camera authentication helper failed") from None
+    try:
+        payload = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise P2PError("native camera authentication helper returned an invalid response") from None
+    required_bools = (
+        "connected",
+        "login_sent",
+        "login_response_received",
+        "authenticated",
+        "disconnected",
+    )
+    state = payload.get("connect_state")
+    command = payload.get("login_command")
+    result = payload.get("login_result")
+    if (
+        not isinstance(state, int)
+        or any(not isinstance(payload.get(name), bool) for name in required_bools)
+        or (command is not None and not isinstance(command, int))
+        or (result is not None and not isinstance(result, int))
+    ):
+        raise P2PError("native camera authentication helper returned an invalid result")
+    if completed.returncode not in {0, 4, 5}:
+        raise P2PError("native camera authentication helper failed safely")
+    return AuthenticationResult(
+        connected=payload["connected"],
+        connect_state=state,
+        login_sent=payload["login_sent"],
+        login_response_received=payload["login_response_received"],
+        authenticated=payload["authenticated"],
+        login_command=command,
+        login_result=result,
+        disconnected=payload["disconnected"],
+    )
