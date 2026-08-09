@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "okam_native_app/**"
+      - "src/okam_native/**"
       - "native/android_compat/**"
       - "native/hybris_probe/**"
       - "tools/fetch_official_sdk.py"

@@ -12,6 +12,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from okam_native.account import AccountError, Eye4AccountClient
+
 
 DATA = Path("/data")
 VENDOR = DATA / "vendor"
@@ -20,7 +22,9 @@ LIBRARY = VENDOR / "libOKSMARTPPCS.so"
 STATUS: dict[str, object] = {
     "service": "okam-native-lab",
     "loader_ready": False,
+    "account_ready": False,
     "camera_ready": False,
+    "configuration_required": True,
     "phase": "starting",
 }
 LOCK = threading.Lock()
@@ -71,6 +75,46 @@ def load_vendor_runtime() -> None:
     print("native_loader_ready=true", flush=True)
 
 
+def load_options() -> dict[str, object]:
+    path = DATA / "options.json"
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise RuntimeError("Home Assistant app options are invalid") from None
+    if not isinstance(value, dict):
+        raise RuntimeError("Home Assistant app options are invalid")
+    return value
+
+
+def enumerate_account() -> None:
+    options = load_options()
+    username = options.get("account_username")
+    password = options.get("account_password")
+    alias = options.get("camera_id") or "cabin"
+    if not isinstance(username, str) or not username or not isinstance(password, str) or not password:
+        set_status(configuration_required=True)
+        return
+    if not isinstance(alias, str):
+        raise RuntimeError("camera alias is invalid")
+    set_status(phase="enumerating_account", configuration_required=False)
+    try:
+        devices = Eye4AccountClient().enumerate(username, password)
+    finally:
+        username = ""
+        password = ""
+    if len(devices) != 1:
+        raise AccountError("secondary account must expose exactly one shared camera")
+    set_status(
+        account_ready=True,
+        device_count=1,
+        camera_alias=alias,
+        phase="account_enumerated",
+    )
+    print("account_enumerated=true device_count=1", flush=True)
+
+
 class StatusHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         with LOCK:
@@ -78,7 +122,10 @@ class StatusHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             status = 200
         elif self.path == "/ready":
-            status = 200 if payload["loader_ready"] else 503
+            ready = payload["loader_ready"] and (
+                payload["account_ready"] or payload["configuration_required"]
+            )
+            status = 200 if ready else 503
         else:
             status = 404
             payload = {"error": "not_found"}
@@ -98,9 +145,11 @@ def main() -> int:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         load_vendor_runtime()
+        enumerate_account()
     except Exception as error:
-        set_status(phase="native_loader_error", error=type(error).__name__)
-        print(f"native_loader_ready=false error={type(error).__name__}", flush=True)
+        phase = "account_enumeration_error" if STATUS["loader_ready"] else "native_loader_error"
+        set_status(phase=phase, error=type(error).__name__)
+        print(f"startup_ready=false error={type(error).__name__}", flush=True)
     try:
         while True:
             time.sleep(3600)

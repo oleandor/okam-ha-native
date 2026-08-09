@@ -35,3 +35,9 @@ The accepted loader uses only `libhybris-common`, real API 28 AOSP
 and `liblog`. The AOSP source archive is checksum pinned and used only while
 building; the final runtime closure is approximately 3.4 MB and contains no
 Android container or framework.
+
+Account discovery is deliberately separate from P2P transport. The service
+reproduces the official WebViewer sequence against the fixed
+`https://api.eye4.cn` origin: account summary, token login, then device list.
+Only the local alias and count cross the status API; vendor identifiers,
+passwords, and tokens remain in process memory and are never logged.

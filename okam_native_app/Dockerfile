@@ -66,6 +66,7 @@ COPY --from=native-build /out/android-stubs /opt/android-stubs
 COPY --from=native-build /out/okam-hybris-probe /opt/okam/okam-hybris-probe
 COPY tools/fetch_official_sdk.py /opt/okam/tools/fetch_official_sdk.py
 COPY docs/vendor-artifacts.json /opt/okam/docs/vendor-artifacts.json
+COPY src/okam_native /opt/okam/okam_native
 COPY okam_native_app/app_entrypoint.py /opt/okam/app_entrypoint.py
 
 EXPOSE 8099

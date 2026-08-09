@@ -1,5 +1,5 @@
 name: O-KAM Native Lab
-version: 0.0.2
+version: 0.0.3
 slug: okam_native
 description: ARM64 native-runtime acceptance app for O-KAM cameras
 url: https://github.com/oleandor/okam-ha-native
@@ -16,5 +16,11 @@ ports:
   8099/tcp: 8099
 ports_description:
   8099/tcp: Native runtime status API
-options: {}
-schema: {}
+options:
+  account_username: null
+  account_password: null
+  camera_id: cabin
+schema:
+  account_username: email
+  account_password: password
+  camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
