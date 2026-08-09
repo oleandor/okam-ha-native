@@ -140,6 +140,13 @@ class StreamProbeResult(AuthenticationResult):
     h265_frames: int
 
 
+@dataclass(frozen=True)
+class SnapshotProbeResult(StreamProbeResult):
+    jpeg: bytes
+    width: int
+    height: int
+
+
 def run_connect_probe(
     helper: str,
     library: str,
@@ -264,6 +271,10 @@ def run_stream_probe(
         payload = json.loads(completed.stdout.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
         raise P2PError("native H.264 helper returned an invalid response") from None
+    return _stream_result(payload, completed.returncode)
+
+
+def _stream_result(payload: object, returncode: int) -> StreamProbeResult:
     bool_fields = (
         "connected",
         "login_sent",
@@ -284,12 +295,14 @@ def run_stream_probe(
         "h265_frames",
     )
     if (
+        not isinstance(payload, dict)
+        or
         any(not isinstance(payload.get(name), bool) for name in bool_fields)
         or any(not isinstance(payload.get(name), int) for name in int_fields)
         or any(payload[name] < 0 for name in ("h264_frames", "h264_bytes", "h265_frames"))
     ):
         raise P2PError("native H.264 helper returned an invalid result")
-    if completed.returncode not in {0, 4, 5, 6}:
+    if returncode not in {0, 4, 5, 6}:
         raise P2PError("native H.264 helper failed safely")
     return StreamProbeResult(
         connected=payload["connected"],
@@ -307,4 +320,147 @@ def run_stream_probe(
         h264_bytes=payload["h264_bytes"],
         keyframe_seen=payload["keyframe_seen"],
         h265_frames=payload["h265_frames"],
+    )
+
+
+def _jpeg_dimensions(jpeg: bytes) -> tuple[int, int]:
+    if len(jpeg) < 11 or not jpeg.startswith(b"\xff\xd8"):
+        raise P2PError("native snapshot decoder returned invalid JPEG data")
+    offset = 2
+    start_of_frame = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+    while offset + 4 <= len(jpeg):
+        if jpeg[offset] != 0xFF:
+            offset += 1
+            continue
+        while offset < len(jpeg) and jpeg[offset] == 0xFF:
+            offset += 1
+        if offset >= len(jpeg):
+            break
+        marker = jpeg[offset]
+        offset += 1
+        if marker in {0x01, 0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            continue
+        if offset + 2 > len(jpeg):
+            break
+        segment_length = int.from_bytes(jpeg[offset : offset + 2], "big")
+        if segment_length < 2 or offset + segment_length > len(jpeg):
+            break
+        if marker in start_of_frame and segment_length >= 7:
+            height = int.from_bytes(jpeg[offset + 3 : offset + 5], "big")
+            width = int.from_bytes(jpeg[offset + 5 : offset + 7], "big")
+            if width > 0 and height > 0:
+                return width, height
+            break
+        offset += segment_length
+    raise P2PError("native snapshot decoder returned invalid JPEG data")
+
+
+def run_snapshot_probe(
+    helper: str,
+    library: str,
+    ffmpeg: str,
+    uid: str,
+    service_parameter: str,
+    device_password: str,
+    *,
+    environment: dict[str, str],
+    timeout: float = 125.0,
+) -> SnapshotProbeResult:
+    """Decode one native H.264 frame to an in-memory JPEG and disconnect."""
+
+    stdin = _field(uid) + _field(service_parameter) + _field(device_password)
+    helper_process: subprocess.Popen[bytes] | None = None
+    decoder_process: subprocess.Popen[bytes] | None = None
+    try:
+        helper_process = subprocess.Popen(
+            [helper, library, "--stream-stdout"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            bufsize=0,
+        )
+        assert helper_process.stdin is not None
+        assert helper_process.stdout is not None
+        assert helper_process.stderr is not None
+        helper_process.stdin.write(stdin)
+        helper_process.stdin.close()
+        helper_process.stdin = None
+        decoder_process = subprocess.Popen(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "h264",
+                "-i",
+                "pipe:0",
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                "3",
+                "pipe:1",
+            ],
+            stdin=helper_process.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        helper_process.stdout.close()
+        jpeg, _decoder_stderr = decoder_process.communicate(timeout=timeout)
+        if decoder_process.returncode != 0:
+            raise P2PError("native snapshot decoder failed")
+        helper_process.wait(timeout=15)
+        helper_stderr = helper_process.stderr.read(MAX_RESPONSE_BYTES + 1)
+    except P2PError:
+        raise
+    except (OSError, subprocess.SubprocessError, TimeoutError):
+        raise P2PError("native snapshot helper failed") from None
+    finally:
+        if decoder_process is not None and decoder_process.poll() is None:
+            decoder_process.kill()
+            decoder_process.wait(timeout=5)
+        if helper_process is not None and helper_process.poll() is None:
+            helper_process.terminate()
+            try:
+                helper_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                helper_process.kill()
+                helper_process.wait(timeout=5)
+    if len(helper_stderr) > MAX_RESPONSE_BYTES:
+        raise P2PError("native snapshot helper returned an invalid response")
+    payload: object | None = None
+    for line in reversed(helper_stderr.splitlines()):
+        try:
+            candidate = json.loads(line.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            continue
+        if isinstance(candidate, dict) and "h264_received" in candidate:
+            payload = candidate
+            break
+    stream = _stream_result(payload, helper_process.returncode)
+    width, height = _jpeg_dimensions(jpeg)
+    return SnapshotProbeResult(
+        connected=stream.connected,
+        connect_state=stream.connect_state,
+        login_sent=stream.login_sent,
+        login_response_received=stream.login_response_received,
+        authenticated=stream.authenticated,
+        login_command=stream.login_command,
+        login_result=stream.login_result,
+        disconnected=stream.disconnected,
+        stream_start_sent=stream.stream_start_sent,
+        stream_stop_sent=stream.stream_stop_sent,
+        h264_received=stream.h264_received,
+        h264_frames=stream.h264_frames,
+        h264_bytes=stream.h264_bytes,
+        keyframe_seen=stream.keyframe_seen,
+        h265_frames=stream.h265_frames,
+        jpeg=jpeg,
+        width=width,
+        height=height,
     )

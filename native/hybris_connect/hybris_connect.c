@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -38,7 +39,13 @@ typedef bool (*client_disconnect_fn)(void *);
 typedef void (*client_destroy_fn)(void *);
 
 static uintptr_t stack_guard;
+static volatile sig_atomic_t stream_running = 1;
 extern void __stack_chk_fail(void);
+
+static void stop_streaming(int signal_number) {
+    (void)signal_number;
+    stream_running = 0;
+}
 
 static void *okam_hook(const char *symbol_name, const char *requester) {
     (void)requester;
@@ -234,13 +241,65 @@ static bool await_h264_frames(client_read_fn client_read, void *client,
     return *frames >= MIN_H264_FRAMES && *bytes >= MIN_H264_BYTES && *keyframe_seen;
 }
 
+static bool write_stdout(const unsigned char *payload, size_t size) {
+    size_t offset = 0;
+    while (offset < size) {
+        ssize_t written = write(STDOUT_FILENO, payload + offset, size - offset);
+        if (written > 0) {
+            offset += (size_t)written;
+            continue;
+        }
+        if (written < 0 && errno == EINTR) continue;
+        return false;
+    }
+    return true;
+}
+
+static bool forward_h264_frames(client_read_fn client_read, void *client,
+                                unsigned int *frames, unsigned long long *bytes,
+                                bool *keyframe_seen, unsigned int *h265_frames) {
+    while (stream_running) {
+        time_t deadline = time(NULL) + STREAM_TIMEOUT_SECONDS;
+        unsigned char header[VIDEO_HEADER_BYTES];
+        if (!read_client_exact(client_read, client, VIDEO_CHANNEL,
+                               header, sizeof(header), deadline)) return false;
+        if (read_le32(header) != 0xa815aa55U) return false;
+        uint32_t length = read_le32(header + 16);
+        if (length == 0 || length > MAX_VIDEO_FRAME_BYTES) return false;
+        unsigned char *payload = malloc(length);
+        if (payload == NULL) return false;
+        bool read_ok = read_client_exact(client_read, client, VIDEO_CHANNEL,
+                                         payload, length, deadline);
+        bool write_ok = true;
+        if (read_ok) {
+            if (header[4] == 0x10U || header[4] == 0x11U) {
+                (*h265_frames)++;
+            } else if (inspect_h264_payload(payload, length, keyframe_seen)) {
+                (*frames)++;
+                *bytes += length;
+                write_ok = write_stdout(payload, length);
+            }
+        }
+        memset(payload, 0, length);
+        free(payload);
+        if (!read_ok) return false;
+        if (!write_ok) {
+            stream_running = 0;
+            break;
+        }
+    }
+    return *frames > 0;
+}
+
 int main(int argc, char **argv) {
     bool stream_test = argc == 3 && strcmp(argv[2], "--stream-test") == 0;
-    bool authenticate = stream_test ||
+    bool stream_stdout = argc == 3 && strcmp(argv[2], "--stream-stdout") == 0;
+    bool live_mode = stream_test || stream_stdout;
+    bool authenticate = live_mode ||
         (argc == 3 && strcmp(argv[2], "--authenticate") == 0);
     if (argc != 2 && !authenticate) {
         fputs("usage: okam-hybris-connect /path/to/libOKSMARTPPCS.so "
-              "[--authenticate|--stream-test]\n", stderr);
+              "[--authenticate|--stream-test|--stream-stdout]\n", stderr);
         return 2;
     }
     char *uid = read_field();
@@ -297,7 +356,7 @@ int main(int argc, char **argv) {
         fputs("official native P2P authentication API is incomplete\n", stderr);
         return 3;
     }
-    if (stream_test && client_write_cgi == NULL) {
+    if (live_mode && client_write_cgi == NULL) {
         android_dlclose(library);
         free(uid);
         free(service_parameter);
@@ -336,13 +395,22 @@ int main(int argc, char **argv) {
                 authenticated = login_response_received && login_result == 0;
             }
         }
-        if (connected && authenticated && stream_test) {
+        if (connected && authenticated && live_mode) {
             stream_start_sent = client_write_cgi(
                 client, "livestream.cgi?streamid=10&substream=2&", 5000);
             if (stream_start_sent) {
-                h264_received = await_h264_frames(
-                    client_read, client, &h264_frames, &h264_bytes,
-                    &keyframe_seen, &h265_frames);
+                if (stream_stdout) {
+                    signal(SIGPIPE, SIG_IGN);
+                    signal(SIGINT, stop_streaming);
+                    signal(SIGTERM, stop_streaming);
+                    h264_received = forward_h264_frames(
+                        client_read, client, &h264_frames, &h264_bytes,
+                        &keyframe_seen, &h265_frames);
+                } else {
+                    h264_received = await_h264_frames(
+                        client_read, client, &h264_frames, &h264_bytes,
+                        &keyframe_seen, &h265_frames);
+                }
                 stream_stop_sent = client_write_cgi(
                     client, "livestream.cgi?streamid=16&substream=0&", 5000);
             }
@@ -356,7 +424,22 @@ int main(int argc, char **argv) {
         memset(device_password, 0, strlen(device_password));
         free(device_password);
     }
-    if (stream_test) {
+    if (stream_stdout) {
+        fprintf(stderr,
+                "{\"connected\":%s,\"connect_state\":%d,\"login_sent\":%s,"
+                "\"login_response_received\":%s,\"authenticated\":%s,"
+                "\"login_command\":%u,\"login_result\":%d,"
+                "\"stream_start_sent\":%s,\"stream_stop_sent\":%s,"
+                "\"h264_received\":%s,\"h264_frames\":%u,\"h264_bytes\":%llu,"
+                "\"keyframe_seen\":%s,\"h265_frames\":%u,\"disconnected\":%s}\n",
+                connected ? "true" : "false", state, login_sent ? "true" : "false",
+                login_response_received ? "true" : "false",
+                authenticated ? "true" : "false", login_command, login_result,
+                stream_start_sent ? "true" : "false", stream_stop_sent ? "true" : "false",
+                h264_received ? "true" : "false", h264_frames, h264_bytes,
+                keyframe_seen ? "true" : "false", h265_frames,
+                disconnected ? "true" : "false");
+    } else if (stream_test) {
         printf("{\"connected\":%s,\"connect_state\":%d,\"login_sent\":%s,"
                "\"login_response_received\":%s,\"authenticated\":%s,"
                "\"login_command\":%u,\"login_result\":%d,"
@@ -389,7 +472,7 @@ int main(int argc, char **argv) {
     }
     android_dlclose(library);
     if (!connected || !disconnected) return 4;
-    if (stream_test && (!authenticated || !stream_start_sent || !stream_stop_sent ||
-                        !h264_received)) return 6;
+    if (live_mode && (!authenticated || !stream_start_sent || !stream_stop_sent ||
+                      !h264_received)) return 6;
     return !authenticate || authenticated ? 0 : 5;
 }

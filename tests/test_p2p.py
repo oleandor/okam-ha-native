@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from okam_native.p2p import (
+    _jpeg_dimensions,
     P2PError,
     get_service_parameter,
     resolve_client_id,
@@ -162,3 +163,15 @@ def test_stream_probe_returns_only_sanitized_metrics(monkeypatch) -> None:
     assert b"sensitive-device-password" not in b" ".join(
         value.encode() for value in recorded["command"]
     )
+
+
+def test_jpeg_dimensions_accepts_bounded_sof_header() -> None:
+    jpeg = (
+        b"\xff\xd8"
+        b"\xff\xe0\x00\x04\x00\x00"
+        b"\xff\xc0\x00\x11\x08\x01\xe0\x02\x80"
+        b"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00"
+        b"\xff\xd9"
+    )
+
+    assert _jpeg_dimensions(jpeg) == (640, 480)

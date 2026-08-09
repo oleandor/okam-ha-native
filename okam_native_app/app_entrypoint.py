@@ -20,6 +20,7 @@ from okam_native.p2p import (
     resolve_client_id,
     run_authentication_probe,
     run_connect_probe,
+    run_snapshot_probe,
     run_stream_probe,
 )
 from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
@@ -29,6 +30,7 @@ DATA = Path("/data")
 VENDOR = DATA / "vendor"
 PROBE = Path("/opt/okam/okam-hybris-probe")
 CONNECT_HELPER = Path("/opt/okam/okam-hybris-connect")
+FFMPEG = Path("/usr/bin/ffmpeg")
 LIBRARY = VENDOR / "libOKSMARTPPCS.so"
 STATUS: dict[str, object] = {
     "service": "okam-native-lab",
@@ -41,6 +43,8 @@ STATUS: dict[str, object] = {
     "camera_authenticated": False,
     "stream_test_enabled": False,
     "h264_ready": False,
+    "snapshot_test_enabled": False,
+    "snapshot_ready": False,
     "configuration_required": True,
     "phase": "starting",
 }
@@ -155,11 +159,14 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
     enabled = options.get("run_connect_test") is True
     auth_enabled = options.get("run_auth_test") is True
     stream_enabled = options.get("run_stream_test") is True
+    snapshot_enabled = options.get("run_snapshot_test") is True
+    stream_enabled = stream_enabled or snapshot_enabled
     auth_enabled = auth_enabled or stream_enabled
     set_status(
         connect_test_enabled=enabled or auth_enabled,
         auth_test_enabled=auth_enabled,
         stream_test_enabled=stream_enabled,
+        snapshot_test_enabled=snapshot_enabled,
     )
     if not enabled and not auth_enabled and not stream_enabled:
         return
@@ -186,7 +193,17 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
             wake_responsive_servers=responsive_servers,
             phase="connecting_p2p",
         )
-        if stream_enabled:
+        if snapshot_enabled:
+            result = run_snapshot_probe(
+                str(CONNECT_HELPER),
+                str(LIBRARY),
+                str(FFMPEG),
+                client_id,
+                service_parameter,
+                device.device_password,
+                environment=p2p_environment(),
+            )
+        elif stream_enabled:
             result = run_stream_probe(
                 str(CONNECT_HELPER),
                 str(LIBRARY),
@@ -243,7 +260,24 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 keyframe_seen=result.keyframe_seen,
                 h265_frames=result.h265_frames,
             )
-            if result.h264_received and result.disconnected:
+            if snapshot_enabled and result.h264_received and result.disconnected:
+                set_status(
+                    h264_ready=True,
+                    snapshot_ready=True,
+                    snapshot_bytes=len(result.jpeg),
+                    snapshot_width=result.width,
+                    snapshot_height=result.height,
+                    phase="snapshot_created",
+                    connect_attempt=attempt,
+                )
+                print(
+                    f"snapshot_created=true width={result.width} "
+                    f"height={result.height} bytes={len(result.jpeg)} "
+                    "clean_disconnect=true",
+                    flush=True,
+                )
+                return
+            if not snapshot_enabled and result.h264_received and result.disconnected:
                 set_status(
                     h264_ready=True,
                     phase="h264_received",
@@ -300,6 +334,7 @@ class StatusHandler(BaseHTTPRequestHandler):
                     and (not payload["connect_test_enabled"] or payload["p2p_ready"])
                     and (not payload["auth_test_enabled"] or payload["camera_authenticated"])
                     and (not payload["stream_test_enabled"] or payload["h264_ready"])
+                    and (not payload["snapshot_test_enabled"] or payload["snapshot_ready"])
                 )
             )
             status = 200 if ready else 503
@@ -327,8 +362,10 @@ def main() -> int:
             run_p2p_acceptance(device)
     except Exception as error:
         phase = "startup_error" if STATUS["loader_ready"] else "native_loader_error"
-        set_status(phase=phase, error=type(error).__name__)
-        print(f"startup_ready=false error={type(error).__name__}", flush=True)
+        detail = str(error).replace(" ", "_") if isinstance(error, P2PError) else None
+        set_status(phase=phase, error=type(error).__name__, error_detail=detail)
+        suffix = f" detail={detail}" if detail else ""
+        print(f"startup_ready=false error={type(error).__name__}{suffix}", flush=True)
     try:
         while True:
             time.sleep(3600)

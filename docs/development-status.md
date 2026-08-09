@@ -21,15 +21,19 @@
 - Both official wake endpoints accepted a bounded request for the physical
   camera. The ARM64 native helper then reached `ONLINE` state 3 against that
   camera and performed a clean disconnect under ARM64 emulation.
+- O-KAM Native Lab 0.0.6 passed on the physical Raspberry Pi: account
+  enumeration, both wake services, native P2P state 3, camera authentication,
+  an Annex-B H.264 keyframe, official stream stop, and clean disconnect.
+- The 0.0.7 candidate fed the physical camera's native H.264 through a
+  checksum-pinned minimal FFmpeg build containing only H.264 decode, MJPEG
+  encode, pipe/image2pipe, and the required scale filter. It produced a valid
+  2304x1296 in-memory JPEG and disconnected cleanly without persisting imagery.
 
 ## Not yet accepted
 
-- The native wake/connect/disconnect path still needs the same successful result
-  from the Home Assistant app on the physical Raspberry Pi.
-- Camera-level `admin` authentication and its response callback are not yet
-  accepted through the native helper.
-- Native H.264 receive, snapshot, on-demand reuse, idle disconnect, and clean
-  service shutdown remain unaccepted.
+- Persistent native stream reuse, viewer reference counting, idle disconnect,
+  Home Assistant camera API compatibility, and clean long-running service
+  shutdown remain unaccepted.
 
 Version 0.2.0 remains blocked by the machine-readable physical gates. The
 repository version stays at 0.0.x while these items are under development.

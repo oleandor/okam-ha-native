@@ -1,5 +1,5 @@
 name: O-KAM Native Lab
-version: 0.0.6
+version: 0.0.7
 slug: okam_native
 description: ARM64 native-runtime acceptance app for O-KAM cameras
 url: https://github.com/oleandor/okam-ha-native
@@ -23,6 +23,7 @@ options:
   run_connect_test: false
   run_auth_test: false
   run_stream_test: false
+  run_snapshot_test: false
 schema:
   account_username: email
   account_password: password
@@ -30,3 +31,4 @@ schema:
   run_connect_test: bool
   run_auth_test: bool
   run_stream_test: bool
+  run_snapshot_test: bool

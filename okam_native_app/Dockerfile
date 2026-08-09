@@ -54,6 +54,42 @@ RUN curl -fsSL "$AOSP_URL" -o /tmp/aosp.zip \
     && debugfs -R 'dump -p /system/lib64/libz.so /out/bionic/libz.so' /tmp/system.ext4 >/dev/null \
     && debugfs -R 'dump -p /system/bin/linker64 /out/bionic/ld-android.so' /tmp/system.ext4 >/dev/null
 
+FROM debian:bookworm-slim AS ffmpeg-build
+ARG FFMPEG_VERSION=8.1.2
+ARG FFMPEG_SHA256=9fd092511605bbebafe095ea6d38d9e40f34d12f7386e1258372df8be0576eb7
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev make \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_VERSION}.tar.gz" -o /tmp/ffmpeg.tar.gz \
+    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.gz" | sha256sum -c - \
+    && tar -xf /tmp/ffmpeg.tar.gz -C /tmp \
+    && cd "/tmp/FFmpeg-n${FFMPEG_VERSION}" \
+    && ./configure \
+      --prefix=/out/ffmpeg \
+      --disable-everything \
+      --disable-autodetect \
+      --disable-doc \
+      --disable-debug \
+      --disable-network \
+      --disable-avdevice \
+      --disable-shared \
+      --enable-static \
+      --enable-small \
+      --enable-ffmpeg \
+      --enable-protocol=pipe \
+      --enable-demuxer=h264 \
+      --enable-parser=h264 \
+      --enable-decoder=h264 \
+      --enable-encoder=mjpeg \
+      --enable-muxer=image2pipe \
+      --enable-filter=scale \
+      --extra-cflags=-Os \
+      --extra-ldflags=-s
+RUN cd "/tmp/FFmpeg-n${FFMPEG_VERSION}" \
+    && make -j4 ffmpeg \
+    && mkdir -p /out/ffmpeg/bin \
+    && cp ffmpeg /out/ffmpeg/bin/ffmpeg
+
 FROM python:3.12-slim-bookworm
 ARG BUILD_VERSION=0.0.2
 ARG BUILD_ARCH=aarch64
@@ -71,6 +107,7 @@ COPY --from=native-build /out/bionic /opt/bionic
 COPY --from=native-build /out/android-stubs /opt/android-stubs
 COPY --from=native-build /out/okam-hybris-probe /opt/okam/okam-hybris-probe
 COPY --from=native-build /out/okam-hybris-connect /opt/okam/okam-hybris-connect
+COPY --from=ffmpeg-build /out/ffmpeg/bin/ffmpeg /usr/bin/ffmpeg
 COPY tools/fetch_official_sdk.py /opt/okam/tools/fetch_official_sdk.py
 COPY docs/vendor-artifacts.json /opt/okam/docs/vendor-artifacts.json
 COPY src/okam_native /opt/okam/okam_native
