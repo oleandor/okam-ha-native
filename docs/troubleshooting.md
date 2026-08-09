@@ -11,15 +11,16 @@
 2. Open **Settings → Apps → App store**, open **Repositories**, remove any
    incorrect entry, and add the URL again.
 3. Refresh the app store page.
-4. Confirm that Home Assistant reports an `aarch64` system on a Raspberry Pi 4
-   or Raspberry Pi 5.
+4. Confirm that Home Assistant reports an `aarch64` architecture. Raspberry Pi
+   1 and 2 use unsupported 32-bit configurations. Raspberry Pi 3 requires a
+   64-bit Home Assistant OS image.
 
 ## The app says configuration is required
 
 Confirm that all required values are present:
 
-- secondary O-KAM account email
-- secondary O-KAM account password
+- O-KAM account email
+- O-KAM account password
 - a user-created API token containing at least 16 characters
 - a camera alias containing only letters, numbers, `_`, or `-`
 
@@ -27,11 +28,13 @@ Do not use the O-KAM password as the local API token.
 
 ## Account enumeration does not find one camera
 
-The secondary account must contain exactly one shared camera.
+The configured O-KAM account must show exactly one camera. It may be the normal
+camera-owner account or an account to which the camera was shared.
 
-1. Sign in to the secondary account in the O-KAM mobile app.
-2. Confirm that the shared camera is visible and live view works.
-3. Remove any additional shared cameras from that account.
+1. Sign in to the configured account in the O-KAM mobile app.
+2. Confirm that the camera is visible and live view works.
+3. Remove any additional cameras from that account or use an account containing
+   only the intended camera.
 4. Save the Home Assistant app configuration and restart the app.
 
 ## The integration cannot connect
@@ -48,15 +51,17 @@ The secondary account must contain exactly one shared camera.
 The app and integration values must match exactly. The token is case-sensitive.
 After changing it in the app, restart the app and reconfigure the integration.
 
-## Live view initially appears blank
+## The camera says it is sleeping or waking up
 
-A sleeping battery camera commonly needs 20–30 seconds to wake. Keep the live
-view open for at least 45 seconds on the first attempt.
+The sleeping image is normal and does not wake a battery camera. Open live view
+to start wake-up. The waking-up image remains visible while the camera connects;
+this commonly takes 20–30 seconds. Keep live view open for at least 45 seconds
+on the first attempt.
 
 If it remains blank:
 
 1. Confirm `/ready` reports `camera_ready: true`.
-2. Confirm the secondary account can still open live view in the O-KAM app.
+2. Confirm the configured account can still open live view in the O-KAM app.
 3. Close every Home Assistant live-view window.
 4. Wait for the idle timeout.
 5. Restart only the O-KAM Native Bridge app and try again.
@@ -113,7 +118,7 @@ additional camera wake and media test every time the app starts.
 Include:
 
 - O-KAM Native Bridge version
-- Raspberry Pi model
+- hardware model and architecture
 - Home Assistant OS, Supervisor, and Core versions
 - app log from startup through the failure
 - the `/ready` response

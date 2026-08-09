@@ -24,9 +24,11 @@ class FakeSession:
 
     def __init__(self) -> None:
         self.subscription = FakeSubscription()
+        self.running = False
+        self.media_ready = False
 
     def status(self) -> SessionStatus:
-        return SessionStatus(False, 0, True, None)
+        return SessionStatus(self.running, 0, True, None, self.media_ready)
 
     def snapshot(self, _ffmpeg: str):
         return b"\xff\xd8jpeg\xff\xd9", 2304, 1296
@@ -148,3 +150,21 @@ def test_bridge_idle_timeout_is_bounded() -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_bridge_reports_idle_waking_and_streaming_states() -> None:
+    session = FakeSession()
+    bridge = CameraBridge(
+        camera_id="cabin",
+        camera_name="Cabin",
+        api_token="safe-api-token-123",
+        session=session,  # type: ignore[arg-type]
+        ffmpeg="ffmpeg",
+    )
+
+    assert bridge.status()["state"] == "idle"
+    assert bridge.status()["media_ready"] is False
+    session.running = True
+    assert bridge.status()["state"] == "waking"
+    session.media_ready = True
+    assert bridge.status()["state"] == "streaming"

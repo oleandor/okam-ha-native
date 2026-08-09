@@ -39,7 +39,7 @@ async def enumerate_once(bridge_root: Path) -> int:
 
     credentials = load_windows_credential()
     if credentials is None:
-        raise RuntimeError("secondary account credential is unavailable")
+        raise RuntimeError("O-KAM account credential is unavailable")
     username, password = credentials
     client = WebViewerClient(
         ws_url="ws://127.0.0.1:880",

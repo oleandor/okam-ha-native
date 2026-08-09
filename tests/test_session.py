@@ -54,6 +54,13 @@ def test_session_reuses_process_and_stops_after_last_viewer() -> None:
     second = session.acquire()
     assert len(starts) == 1
     assert session.status().viewers == 2
+    assert session.status().media_ready is False
+
+    process.stdout.chunks.put(b"\x00\x00\x00\x01h264")
+    deadline = time.monotonic() + 2
+    while not session.status().media_ready and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert session.status().media_ready is True
 
     first.close()
     assert process.poll() is None

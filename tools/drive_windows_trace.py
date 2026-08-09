@@ -47,13 +47,13 @@ async def run(bridge_root: Path, live_seconds: float) -> int:
     try:
         devices = await client.list_devices()
         if len(devices) != 1 or client.vendor_device_id is None:
-            raise RuntimeError("trace requires exactly one shared camera")
+            raise RuntimeError("trace requires exactly one visible camera")
         await wake_camera(client.vendor_device_id, wake_credentials, timeout=15)
         await client.wake("trace-camera")
         await client.start_stream("trace-camera")
         await asyncio.sleep(live_seconds)
         await client.stop_stream("trace-camera")
-        print("Trace driver completed one wake/start/stop session for one shared camera.")
+        print("Trace driver completed one wake/start/stop session for one camera.")
         return 0
     finally:
         await client.close()

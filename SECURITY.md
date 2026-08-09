@@ -12,8 +12,7 @@ Do not open a public issue for an undisclosed vulnerability.
 
 ## Credential safety
 
-- Use a secondary O-KAM account containing only the camera intended for Home
-  Assistant.
+- Use an O-KAM account containing only the camera intended for Home Assistant.
 - Use a unique random local API token of at least 16 characters.
 - Never post account names, passwords, API tokens, camera identifiers, packet
   captures, media, or unredacted logs.

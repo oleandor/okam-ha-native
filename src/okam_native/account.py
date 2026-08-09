@@ -22,7 +22,7 @@ class AccountError(RuntimeError):
 
 @dataclass(frozen=True, repr=False)
 class AccountDevice:
-    """A shared camera record whose sensitive values are excluded from repr."""
+    """An O-KAM camera record whose sensitive values are excluded from repr."""
 
     uid: str = field(repr=False)
     name: str
@@ -85,10 +85,10 @@ class Eye4AccountClient:
         return result
 
     def enumerate(self, username: str, password: str) -> list[AccountDevice]:
-        """Authenticate and return shared devices without logging identifiers."""
+        """Authenticate and return visible devices without logging identifiers."""
 
         if not username or not password or len(username) > 320 or len(password) > 1024:
-            raise AccountError("secondary account credentials are invalid")
+            raise AccountError("O-KAM account credentials are invalid")
         summary = self._request_json(
             "POST", "/user/summary", form={"name": username, "oemid": "VSTC"}
         )
@@ -107,7 +107,7 @@ class Eye4AccountClient:
             query={"userid": str(user_id), "password": password_digest, "type": "PC"},
         )
         if not isinstance(login, dict) or not isinstance(login.get("token"), str):
-            raise AccountError("secondary account credentials were rejected")
+            raise AccountError("O-KAM account credentials were rejected")
 
         devices = self._request_json(
             "GET",

@@ -23,6 +23,7 @@ class SessionStatus:
     viewers: int
     clean_disconnect: bool | None
     last_error: str | None
+    media_ready: bool = False
 
 
 class StreamSubscription:
@@ -70,6 +71,7 @@ class NativeStreamSession:
         self._stderr = bytearray()
         self._clean_disconnect: bool | None = None
         self._last_error: str | None = None
+        self._media_ready = False
         self._closed = False
 
     def acquire(self) -> StreamSubscription:
@@ -167,6 +169,7 @@ class NativeStreamSession:
                 viewers=len(self._subscribers),
                 clean_disconnect=self._clean_disconnect,
                 last_error=self._last_error,
+                media_ready=self._media_ready,
             )
 
     def close(self) -> None:
@@ -182,6 +185,7 @@ class NativeStreamSession:
         self._stderr.clear()
         self._clean_disconnect = None
         self._last_error = None
+        self._media_ready = False
         process = self._starter()
         if process.stdout is None or process.stderr is None:
             process.kill()
@@ -206,6 +210,7 @@ class NativeStreamSession:
                 if not chunk:
                     break
                 with self._lock:
+                    self._media_ready = True
                     subscribers = tuple(self._subscribers.values())
                 for chunks in subscribers:
                     try:

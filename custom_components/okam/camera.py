@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import OkamRuntime
 from .entity import OkamEntity
+from .placeholders import SLEEPING_PLACEHOLDER, WAKING_PLACEHOLDER
 
 
 async def async_setup_entry(
@@ -32,9 +33,20 @@ class OkamCamera(OkamEntity, Camera):
 
     async def async_camera_image(self, width=None, height=None) -> bytes | None:
         try:
-            return await self._api.snapshot(self.coordinator.camera_id)
+            status = await self._api.status(self.coordinator.camera_id)
+            state = status.get("state")
+            if state == "idle":
+                self.content_type = "image/png"
+                return SLEEPING_PLACEHOLDER
+            if state == "waking":
+                self.content_type = "image/png"
+                return WAKING_PLACEHOLDER
+            image = await self._api.snapshot(self.coordinator.camera_id)
+            self.content_type = "image/jpeg"
+            return image
         except Exception:
-            return None
+            self.content_type = "image/png"
+            return WAKING_PLACEHOLDER
 
     async def stream_source(self) -> str | None:
         return await self._api.stream_source(self.coordinator.camera_id)
