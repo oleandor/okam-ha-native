@@ -54,12 +54,17 @@ class CameraBridge:
 
     def status(self) -> dict[str, object]:
         session = self.session.status()
+        if session.running:
+            state = "streaming" if session.media_ready else "waking"
+        else:
+            state = "idle"
         return {
             "camera_id": self.camera_id,
             "name": self.camera_name,
             "online": True,
-            "state": "streaming" if session.running else "idle",
+            "state": state,
             "viewers": session.viewers,
+            "media_ready": session.media_ready,
             "battery_percent": None,
             "signal_dbm": None,
             "last_event": None,

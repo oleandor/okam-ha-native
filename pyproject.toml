@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "okam-ha-native"
-version = "1.0.0"
+version = "1.1.0"
 description = "Native ARM64 O-KAM Pro camera bridge for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.11"

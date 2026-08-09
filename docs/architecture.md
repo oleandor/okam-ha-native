@@ -21,19 +21,22 @@ O-KAM Native Bridge app
               O-KAM camera
 ```
 
-The integration polls a lightweight status endpoint and asks the app for either
-a live source or a snapshot. Merely loading the integration does not wake the
-camera.
+The integration polls a lightweight status endpoint. While the camera is idle
+or waking, it supplies a generated state image without opening a camera
+connection. Opening live view asks the app for a live source and wakes the
+camera. Once media is flowing, still-image requests attach to the existing
+session and produce a real snapshot.
 
 ## Camera lifecycle
 
-1. The first live viewer or snapshot request acquires a stream subscription.
+1. The first live viewer acquires a stream subscription.
 2. The app requests a low-power wake and starts one native camera session.
-3. Annex-B H.264 frames are distributed to every active viewer.
-4. A snapshot request attaches to the same session and decodes one frame to
+3. The entity reports `waking` until the first H.264 bytes arrive.
+4. Annex-B H.264 frames are distributed to every active viewer.
+5. A snapshot request attaches to the same session and decodes one frame to
    JPEG in memory.
-5. When the final subscription closes, an idle timer starts.
-6. At the end of the idle timeout, the app sends the camera's stream-stop
+6. When the final subscription closes, an idle timer starts.
+7. At the end of the idle timeout, the app sends the camera's stream-stop
    request and disconnects the P2P client cleanly.
 
 Queue sizes and request bodies are bounded. A slow viewer drops older queued

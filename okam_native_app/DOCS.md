@@ -1,22 +1,21 @@
 # O-KAM Native Bridge
 
-O-KAM Native Bridge connects one shared O-KAM Pro camera directly to Home
-Assistant on a 64-bit Raspberry Pi 4 or Raspberry Pi 5. It provides live H.264
-video, JPEG snapshots, automatic camera wake-up, shared viewing, and automatic
-idle disconnect.
+O-KAM Native Bridge connects one O-KAM Pro camera directly to Home Assistant on
+a 64-bit ARM (`aarch64`) system. It provides live H.264 video, JPEG snapshots,
+automatic camera wake-up, shared viewing, and automatic idle disconnect.
 
 ## Before configuring the app
 
-Create a secondary O-KAM account and share exactly one camera to it from the
-camera owner's account. Sign in as the secondary account in the O-KAM app once
-and confirm that live view works.
+Use an O-KAM account that can view exactly one camera. This can be the normal
+camera-owner account or an account to which the camera was shared. Sign in with
+that account in the O-KAM app once and confirm that live view works.
 
 ## Configuration
 
 | Option | Description |
 | --- | --- |
-| `account_username` | Email address of the secondary O-KAM account |
-| `account_password` | Password of the secondary O-KAM account |
+| `account_username` | Email address of the O-KAM account |
+| `account_password` | Password of the O-KAM account |
 | `api_token` | A random local secret of at least 16 characters chosen by you |
 | `camera_id` | Home Assistant camera alias, for example `cabin` |
 | `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `30` is recommended |
@@ -66,9 +65,11 @@ installation creates `camera.cabin` unless that entity ID is already occupied.
 
 ## Operation
 
-A sleeping camera can take 20–30 seconds to wake. Multiple viewers share one
-camera connection. After the final viewer closes, the bridge stops and
-disconnects after the configured idle timeout.
+A sleeping camera displays a sleeping image without waking it. Open live view
+to wake the camera; a waking-up image remains visible until video arrives,
+which commonly takes 20–30 seconds. Multiple viewers share one camera
+connection. After the final viewer closes, the bridge stops and disconnects
+after the configured idle timeout.
 
 Do not expose TCP port 8099 to the internet. See the repository
 [README](https://github.com/oleandor/okam-ha-native#readme) and

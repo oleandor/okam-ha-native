@@ -1,10 +1,10 @@
 configuration:
   account_username:
-    name: Secondary O-KAM account email
-    description: Email address of the account containing exactly one shared camera.
+    name: O-KAM account email
+    description: Email address of an O-KAM account that can view exactly one camera.
   account_password:
-    name: Secondary O-KAM account password
-    description: Password for the secondary view-only O-KAM account.
+    name: O-KAM account password
+    description: Password for the O-KAM account.
   api_token:
     name: Local API token
     description: A random secret of at least 16 characters that you create and also enter in the Home Assistant integration.

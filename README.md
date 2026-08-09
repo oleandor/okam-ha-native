@@ -1,9 +1,9 @@
 # O-KAM Native Bridge for Home Assistant
 
 O-KAM Native Bridge connects an O-KAM Pro camera directly to Home Assistant on
-a 64-bit Raspberry Pi. Live video, snapshots, camera wake-up, and disconnects
-are handled locally by the Pi; no additional computer or phone connection is
-required during normal operation.
+a 64-bit ARM (`aarch64`) system. Live video, snapshots, camera wake-up, and
+disconnects are handled locally by Home Assistant; no additional computer or
+phone connection is required during normal operation.
 
 The project contains both required parts:
 
@@ -14,10 +14,11 @@ The project contains both required parts:
 
 ## Features
 
-- Native ARM64 operation on Raspberry Pi 4 and Raspberry Pi 5
+- Native ARM64 operation with no desktop or emulation layer
 - Live H.264 video in Home Assistant
 - Full-resolution JPEG snapshots
 - Automatic wake-up for battery cameras
+- Clear sleeping and waking-up images instead of a black preview
 - One camera connection shared by simultaneous viewers
 - Automatic stream stop and clean disconnect after the last viewer leaves
 - User-created API token protecting the local bridge
@@ -26,28 +27,32 @@ The project contains both required parts:
 
 ## Requirements
 
-- Raspberry Pi 4 or Raspberry Pi 5 running 64-bit Home Assistant OS
+- A 64-bit ARM (`aarch64`) Home Assistant system
 - An O-KAM Pro camera that works in the O-KAM mobile app
-- A secondary O-KAM account containing exactly one camera shared from the
-  camera owner's account
+- An O-KAM account that can view exactly one camera; the account may own the
+  camera or have it shared to it
 - HACS for the easiest integration installation, or access to
   `/config/custom_components` for manual installation
 
+The app is published for `aarch64`, rather than for specific board names. It
+has been physically validated on Raspberry Pi 4. Raspberry Pi 3 can install it
+when running a 64-bit Home Assistant OS image, although its lower performance
+has not been validated. Raspberry Pi 1 and 2 are not supported because their
+Home Assistant configurations are 32-bit. Raspberry Pi 5 and other `aarch64`
+Home Assistant systems are eligible to install the same prebuilt image.
+
 ## Installation
 
-### 1. Prepare a secondary O-KAM account
+### 1. Check the O-KAM account
 
-The bridge deliberately uses a secondary, view-only account instead of the
-camera owner's main account.
+Use the normal O-KAM account that can open the camera's live view. It may be
+the camera owner account or an account to which the camera was shared. The
+bridge currently supports one camera, so the chosen account must show exactly
+one camera.
 
-1. Create or choose a second O-KAM account.
-2. Sign in to the camera owner's account in the O-KAM app.
-3. Share the camera with the secondary account.
-4. Sign in as the secondary account and verify that live view works.
-5. Make sure this account contains exactly one shared camera.
-
-Keep the secondary account username and password available for the app
-configuration. Do not enter the primary account credentials in the bridge.
+Sign in with that account in the O-KAM mobile app once and confirm that live
+view works. Keep its email address and password available for app
+configuration.
 
 ### 2. Install the O-KAM Native Bridge app
 
@@ -64,8 +69,8 @@ configuration. Do not enter the primary account credentials in the bridge.
 
    | Option | What to enter |
    | --- | --- |
-   | `account_username` | Email address of the secondary O-KAM account |
-   | `account_password` | Password of the secondary O-KAM account |
+   | `account_username` | Email address of the O-KAM account |
+   | `account_password` | Password of the O-KAM account |
    | `api_token` | A new random secret of at least 16 characters that you choose |
    | `camera_id` | Local camera alias, for example `cabin` |
    | `idle_timeout_seconds` | `30` is recommended |
@@ -130,7 +135,9 @@ a numeric suffix; its entity ID can be changed from the entity settings.
 ## Daily use
 
 Open the camera entity or add it to a dashboard using a camera card. A sleeping
-battery camera can take 20–30 seconds to wake before the picture appears.
+battery camera shows **Camera sleeping** without waking it. Open live view to
+wake the camera; **Camera waking up — please wait 20–30 seconds** is displayed
+until video arrives.
 
 Live view uses the camera's native H.264 stream. Multiple viewers share the
 same connection. When the final viewer closes, the bridge waits for the
@@ -173,11 +180,11 @@ problems.
 1. Remove **O-KAM Native Bridge** from **Settings → Devices & services**.
 2. Stop and uninstall the **O-KAM Native Bridge** app.
 3. Optionally remove the custom repositories from HACS and the app store.
-4. Remove the camera share or secondary O-KAM account if it is no longer needed.
+4. Optionally remove the camera from the O-KAM account used by the bridge.
 
 ## Security
 
-- Use only a secondary O-KAM account with one shared camera.
+- Use an O-KAM account that contains only the camera intended for Home Assistant.
 - Keep the O-KAM password and local API token private.
 - Do not expose or port-forward TCP port 8099 to the internet.
 - Rotate the local API token if it is accidentally disclosed.
@@ -187,7 +194,7 @@ See [SECURITY.md](SECURITY.md) for the complete security policy.
 
 ## Technical overview
 
-The app enumerates the shared camera through the fixed official account
+The app enumerates the camera through the fixed official account
 service, wakes it through the official low-power service, and opens the camera's
 native ARM64 P2P transport. H.264 is forwarded directly to Home Assistant.
 FFmpeg is invoked only when a JPEG snapshot is requested. Vendor runtime files
@@ -199,7 +206,7 @@ More detail is available in [Architecture](docs/architecture.md).
 
 Open an issue at
 [github.com/oleandor/okam-ha-native/issues](https://github.com/oleandor/okam-ha-native/issues)
-with the app version, Raspberry Pi model, Home Assistant version, app log, and
+with the app version, hardware model, Home Assistant version, app log, and
 the redacted `/ready` response. Never include passwords, API tokens, or camera
 identifiers.
 

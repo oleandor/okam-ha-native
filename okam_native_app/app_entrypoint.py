@@ -70,9 +70,16 @@ def get_status() -> dict[str, object]:
         payload.update(
             stream_running=session.running,
             stream_viewers=session.viewers,
+            stream_media_ready=session.media_ready,
             clean_disconnect=session.clean_disconnect,
             stream_error=session.last_error,
-            phase="streaming" if session.running else "bridge_ready",
+            phase=(
+                "streaming"
+                if session.running and session.media_ready
+                else "camera_waking"
+                if session.running
+                else "bridge_ready"
+            ),
         )
     return payload
 
@@ -156,7 +163,7 @@ def enumerate_account() -> AccountDevice | None:
         username = ""
         password = ""
     if len(devices) != 1:
-        raise AccountError("secondary account must expose exactly one shared camera")
+        raise AccountError("O-KAM account must expose exactly one camera")
     set_status(
         account_ready=True,
         device_count=1,
