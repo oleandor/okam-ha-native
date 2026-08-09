@@ -1,0 +1,15 @@
+{
+  "gates": {
+    "enumerate_one_shared_camera": false,
+    "wake_physical_camera": false,
+    "receive_h264": false,
+    "decode_stream": false,
+    "create_snapshot": false,
+    "idle_disconnect": false,
+    "clean_shutdown": false,
+    "runs_on_aarch64": false,
+    "no_wine": true,
+    "no_webviewer": true,
+    "no_xvfb": true
+  }
+}

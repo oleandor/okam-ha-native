@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "okam-ha-native"
+version = "0.0.1"
+description = "Native ARM64 O-KAM Pro camera bridge research and runtime"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = []
+
+[project.optional-dependencies]
+trace = ["frida>=17,<18"]
+inspect = ["pyelftools>=0.31,<1"]
+test = ["pytest>=8,<9", "pyelftools>=0.31,<1"]
+
+[project.scripts]
+okam-acceptance = "okam_native.acceptance:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,41 @@
+{
+  "evidence": "physical-camera sanitized WebViewer trace",
+  "architecture": "x86-windows",
+  "module": "DevDll_925.dll",
+  "call_sequence": [
+    "dev_Init2",
+    "dev_SetOnStatus",
+    "dev_SetOnConnected",
+    "dev_SetOnVSample",
+    "dev_SetOnUnVSample",
+    "dev_put_IP",
+    "dev_put_auth",
+    "dev_Connect",
+    "dev_Stop",
+    "dev_Start2",
+    "dev_TransCGI",
+    "dev_TransCGI",
+    "callback_cleanup",
+    "dev_Stop"
+  ],
+  "signatures": {
+    "dev_Init2": ["p2p_server_parameter", "returns_handle"],
+    "dev_SetOnStatus": ["handle", "callback", "context"],
+    "dev_SetOnConnected": ["handle", "callback", "context"],
+    "dev_SetOnVSample": ["handle", "callback", "context"],
+    "dev_SetOnUnVSample": ["handle", "callback", "context"],
+    "dev_put_IP": ["handle", "server_a", "server_b", "port"],
+    "dev_put_auth": ["handle", "login_account", "login_token"],
+    "dev_Connect": ["handle", "connection_type"],
+    "dev_Stop": ["handle"],
+    "dev_Start2": ["handle", "stream_type"],
+    "dev_TransCGI": ["handle", "request", "request_length"]
+  },
+  "observed_constants": {
+    "connection_type": 2,
+    "stream_type": 0,
+    "live_start": "/livestream.cgi?streamid=10&substream=0&",
+    "live_stop": "/livestream.cgi?streamid=16&substream=0&"
+  },
+  "contains_credentials_or_identifiers": false
+}
