@@ -331,7 +331,20 @@ dropped packets on the host, which is why it looked negligible for so long.
 Inbound packets are now matched on the peer host, and the port drift is
 counted.
 
-Gates 8 to 11 still need environments not available during this work — a real
+Gate 8 is met. On a local amd64 Home Assistant installation the config flow
+creates the camera entity, `camera/stream` returns an HLS playlist whose
+segments are real fMP4 media, and the camera proxy returns a JPEG. Reaching it
+required two fixes worth remembering:
+
+- The bridge advertised a raw Annex-B stream, which carries no timestamps.
+  Home Assistant rejects that with "No dts in N consecutive packets", so live
+  view never played while snapshots kept working. The advertised source is now
+  MPEG-TS, muxed without re-encoding.
+- The image's FFmpeg is built with `--disable-everything`, so it had no mpegts
+  muxer and the muxer exited immediately. Any future change to that build must
+  keep the muxers the bridge depends on.
+
+Gates 9 to 11 still need environments not available during this work — a real
 amd64 Home Assistant installation with the integration configured, the physical
 Raspberry Pi, CI, and a registry push.
 

@@ -24,6 +24,10 @@
 - Accepts relay media when NAT renumbers the peer's source port, which
   previously discarded the entire media channel while control traffic
   continued to work.
+- Serves the live stream as MPEG-TS with timestamps, so Home Assistant's
+  stream worker can build HLS. A raw elementary stream was rejected with
+  "No dts in consecutive packets", so live view never played while snapshots
+  kept working.
 - Starts a newly opened live view on a decodable boundary by caching the
   stream's parameter sets and newest keyframe. Opening a second view of an
   already-streaming camera no longer waits for the camera's next keyframe.
