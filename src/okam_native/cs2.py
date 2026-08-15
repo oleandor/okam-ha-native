@@ -587,10 +587,13 @@ class CS2Session:
         # Total handled here, so anything unaccounted for belongs to connect().
         self._count("pump_packets")
         if address != self._peer:
-            # A camera that streams media from a neighbouring source port
-            # would be silently invisible here, so make the drop measurable.
-            self._count("packets_from_other_source")
-            return
+            if self._peer is None or address[0] != self._peer[0]:
+                self._count("packets_from_other_source")
+                return
+            # The relay forwards media from a neighbouring port on the same
+            # host, and NAT between us and it can renumber that port freely.
+            # Dropping those packets discards the entire media channel.
+            self._count("peer_port_drift")
         kind = packet[:2]
         if kind == b"\xf1\xe0":
             self._count("alive_requests")

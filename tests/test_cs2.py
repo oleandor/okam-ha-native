@@ -356,17 +356,6 @@ def test_repeated_camera_punch_is_answered_while_connected() -> None:
     assert session.counters == {"pump_packets": 1, "punch_repeats": 1}
 
 
-def test_packets_from_an_unexpected_source_are_counted_not_hidden() -> None:
-    session = object.__new__(CS2Session)
-    session._peer = ("192.0.2.10", 32100)
-    session._receive_clear = lambda: (b"\xf1\xd0\x00\x00", ("192.0.2.10", 32103))
-    session._retransmit = lambda: None
-
-    session._pump()
-
-    assert session.counters == {"pump_packets": 1, "packets_from_other_source": 1}
-
-
 def test_invalid_values_fail_without_echoing_credentials() -> None:
     with pytest.raises(CS2Error) as caught:
         encode_uid("secret-camera-identifier")
@@ -683,3 +672,35 @@ def test_declined_direct_readiness_is_still_acknowledged(monkeypatch) -> None:
     assert session.connect_path == "relay"
     assert session._peer == RELAY
     assert session.counters["declined_readiness"] == 1
+
+
+def test_media_from_a_drifted_peer_port_is_accepted() -> None:
+    # NAT between the client and the relay can renumber the source port.
+    # Matching on the peer address alone discards the whole media channel.
+    session = object.__new__(CS2Session)
+    session._peer = ("192.0.2.10", 32100)
+    session._incoming_sequence = [0] * 8
+    session._channel_buffers = [bytearray() for _ in range(8)]
+    session._out_of_order = [dict() for _ in range(8)]
+    session._retransmit = lambda: None
+    session._send_clear = lambda _packet, _address: None
+    body = b"\xd1\x01\x00\x00" + b"media"
+    packet = b"\xf1\xd0" + len(body).to_bytes(2, "big") + body
+    session._receive_clear = lambda: (packet, ("192.0.2.10", 40777))
+
+    session._pump()
+
+    assert session._channel_buffers[1] == b"media"
+    assert session.counters["peer_port_drift"] == 1
+    assert "packets_from_other_source" not in session.counters
+
+
+def test_packets_from_a_different_host_are_still_rejected() -> None:
+    session = object.__new__(CS2Session)
+    session._peer = ("192.0.2.10", 32100)
+    session._retransmit = lambda: None
+    session._receive_clear = lambda: (b"\xf1\xd0\x00\x00", ("198.51.100.7", 32100))
+
+    session._pump()
+
+    assert session.counters["packets_from_other_source"] == 1
