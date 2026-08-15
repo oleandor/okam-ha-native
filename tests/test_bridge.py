@@ -92,10 +92,22 @@ def test_bridge_api_is_authenticated_and_exposes_native_camera() -> None:
         stream_url = json.loads(payload)["stream_url"]
         assert "safe-api-token-123" not in stream_url
         parsed = urlsplit(stream_url)
-        code, content_type, payload = request(server, "GET", parsed.path + "?" + parsed.query)
+        # The advertised source is MPEG-TS: a raw elementary stream carries no
+        # timestamps and Home Assistant's stream worker rejects it.
+        assert parsed.path.endswith("/stream.ts")
+        raw_path = parsed.path.replace("/stream.ts", "/stream.h264")
+        code, content_type, payload = request(server, "GET", raw_path + "?" + parsed.query)
         assert code == 200
         assert content_type == "video/h264"
         assert payload.endswith(b"h264")
+        assert session.subscription.closed is True
+
+        # The muxed endpoint degrades rather than hanging when the muxer is
+        # unavailable, and it never leaks the subscription.
+        code, _content_type, _payload = request(
+            server, "GET", parsed.path + "?" + parsed.query
+        )
+        assert code == 503
         assert session.subscription.closed is True
 
         code, content_type, payload = request(

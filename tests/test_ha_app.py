@@ -141,3 +141,14 @@ def test_publish_workflow_passes_the_runtime_stage_selector() -> None:
     assert "TARGETARCH=${{ matrix.docker_arch }}" in workflow
     assert "docker_arch: arm64" in workflow
     assert "docker_arch: amd64" in workflow
+
+
+def test_image_ffmpeg_can_mux_the_live_stream() -> None:
+    # The advertised stream source is MPEG-TS. Home Assistant's stream worker
+    # rejects a raw elementary stream with "No dts in N consecutive packets",
+    # and the minimal FFmpeg build only has the muxers it is told to keep.
+    dockerfile = (ROOT / "okam_native_app" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "--enable-muxer=mpegts" in dockerfile
+    assert "--enable-muxer=image2pipe" in dockerfile
+    assert "--enable-demuxer=h264" in dockerfile
