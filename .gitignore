@@ -13,6 +13,9 @@ dist/
 captures/
 .vendor/
 acceptance.local.json
+secrets.local.json
+*.local.json
+probe-*.log
 *.h264
 *.h265
 *.jpg
