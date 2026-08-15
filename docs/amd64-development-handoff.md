@@ -1,8 +1,12 @@
 # amd64 development handoff
 
-This document describes the unfinished `amd64` implementation on the
-`codex/amd64-support-wip` branch. Do not merge or release this branch until the
-physical live-stream gate in this document passes.
+This document records how `amd64` support was implemented and verified, and
+what the physical testing established about the camera's transport.
+
+Release gates 1 to 10 are met, including live H.264 from a physical camera on
+both architectures and a Raspberry Pi 4 regression. Gate 11 is the release
+itself. The connect intermittency described below is a known issue rather than
+a blocker: the official vendor app fails the same way against the same camera.
 
 No account credentials, camera identifiers, service parameters, IP addresses,
 or captured camera payloads are included here or in the branch.
