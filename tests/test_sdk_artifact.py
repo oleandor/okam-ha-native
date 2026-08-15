@@ -36,6 +36,20 @@ def test_extracts_only_arm64_library_from_duplicate_aars(tmp_path: Path) -> None
     assert wake_result.read_bytes() == b"wake-source"
 
 
+def test_wake_only_extraction_does_not_require_arm_libraries(tmp_path: Path) -> None:
+    sdk_path = tmp_path / "sdk.zip"
+    sdk_path.write_bytes(
+        zip_bytes({"FlutterAppSDK/" + MODULE.WAKE_SOURCE_SUFFIX: b"wake-source"})
+    )
+
+    result = MODULE.extract_wake_source(sdk_path, tmp_path / "output")
+
+    assert result.read_bytes() == b"wake-source"
+    assert [path.name for path in (tmp_path / "output").iterdir()] == [
+        "device_wakeup_server.dart"
+    ]
+
+
 def test_rejects_zip_slip(tmp_path: Path) -> None:
     archive_path = tmp_path / "bad.zip"
     archive_path.write_bytes(zip_bytes({"../" + MODULE.AAR_NAME: b"bad"}))

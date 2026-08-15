@@ -9,10 +9,21 @@ on:
       - "native/android_compat/**"
       - "native/hybris_probe/**"
       - "native/hybris_connect/**"
+      - "native/amd64_connect/**"
       - "tools/fetch_official_sdk.py"
       - "docs/vendor-artifacts.json"
       - ".github/workflows/publish-image.yml"
   workflow_dispatch:
+    inputs:
+      tag_suffix:
+        description: "Suffix for a test build, e.g. test1. Empty publishes the plain version."
+        required: false
+        default: ""
+      move_latest:
+        description: "Also move the latest tag. Ignored unless run from main."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -23,15 +34,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.app.outputs.version }}
+      move_latest: ${{ steps.app.outputs.move_latest }}
     steps:
       - uses: actions/checkout@v6
       - name: Read app version
         id: app
         shell: bash
+        env:
+          TAG_SUFFIX: ${{ inputs.tag_suffix }}
+          REQUEST_LATEST: ${{ inputs.move_latest }}
         run: |
-          echo "version=$(sed -n 's/^version: //p' okam_native_app/config.yaml)" >> "$GITHUB_OUTPUT"
+          set -eu
+          base="$(sed -n 's/^version: //p' okam_native_app/config.yaml)"
+          if [ -n "${TAG_SUFFIX:-}" ]; then
+            echo "version=${base}-${TAG_SUFFIX}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${base}" >> "$GITHUB_OUTPUT"
+          fi
+          # latest must only ever follow main. A test build published from a
+          # branch must not repoint the tag that installations track.
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] \
+             && { [ "${GITHUB_EVENT_NAME}" = "push" ] || [ "${REQUEST_LATEST:-false}" = "true" ]; }; then
+            echo "move_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "move_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ha_arch: aarch64
+            platform: linux/arm64
+            docker_arch: arm64
+          - ha_arch: amd64
+            platform: linux/amd64
+            docker_arch: amd64
+    steps:
+      - uses: actions/checkout@v6
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -39,18 +86,47 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish ARM64 app
+      - name: Build and publish ${{ matrix.ha_arch }} app
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./okam_native_app/Dockerfile
-          platforms: linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ghcr.io/oleandor/okam-ha-native:${{ steps.app.outputs.version }}
-            ghcr.io/oleandor/okam-ha-native:latest
+            ghcr.io/oleandor/okam-ha-native:${{ needs.prepare.outputs.version }}-${{ matrix.ha_arch }}
           build-args: |
-            BUILD_VERSION=${{ steps.app.outputs.version }}
-            BUILD_ARCH=aarch64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_VERSION=${{ needs.prepare.outputs.version }}
+            BUILD_ARCH=${{ matrix.ha_arch }}
+            TARGETARCH=${{ matrix.docker_arch }}
+          cache-from: type=gha,scope=${{ matrix.ha_arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.ha_arch }}
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-architecture manifests
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          MOVE_LATEST: ${{ needs.prepare.outputs.move_latest }}
+        run: |
+          set -eu
+          image="ghcr.io/oleandor/okam-ha-native"
+          tags=(--tag "$image:$VERSION")
+          if [ "$MOVE_LATEST" = "true" ]; then
+            tags+=(--tag "$image:latest")
+          else
+            echo "Leaving :latest untouched; publishing $VERSION only."
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            "$image:$VERSION-aarch64" \
+            "$image:$VERSION-amd64"
+          docker buildx imagetools inspect "$image:$VERSION"

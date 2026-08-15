@@ -4,13 +4,18 @@ __pycache__/
 .pytest_cache/
 .pytest-tmp/
 .pytest-*/
+.tmp-pytest/
 .testdeps/
+.codex-testdeps/
 .coverage
 build/
 dist/
 captures/
 .vendor/
 acceptance.local.json
+secrets.local.json
+*.local.json
+probe-*.log
 *.h264
 *.h265
 *.jpg
@@ -20,3 +25,5 @@ acceptance.local.json
 *.aar
 *.zip
 *.exe
+uv.lock
+*.egg-info/

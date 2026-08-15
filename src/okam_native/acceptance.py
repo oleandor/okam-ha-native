@@ -1,4 +1,4 @@
-"""Machine-checkable release gate for the future native 0.2.0 image."""
+"""Machine-checkable release gate for the native multi-architecture image."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ REQUIRED_GATES = (
     "idle_disconnect",
     "clean_shutdown",
     "runs_on_aarch64",
+    "runs_on_amd64",
     "no_wine",
     "no_webviewer",
     "no_xvfb",
@@ -40,9 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     report = json.loads(args.report.read_text(encoding="utf-8"))
     passed, failures = evaluate(report)
     if passed:
-        print("Native 0.2.0 acceptance gates: PASS")
+        print("Native multi-architecture acceptance gates: PASS")
         return 0
-    print("Native 0.2.0 acceptance gates: FAIL")
+    print("Native multi-architecture acceptance gates: FAIL")
     for failure in failures:
         print("- " + failure)
     return 1

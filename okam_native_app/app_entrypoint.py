@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Run the native ARM64 loader acceptance gate and expose local status."""
+"""Run the native O-KAM bridge for the current Home Assistant architecture."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import platform
 import signal
 import subprocess
 import sys
 import threading
 import time
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from okam_native.account import AccountDevice, AccountError, Eye4AccountClient
-from okam_native.bridge import CameraBridge, make_handler
+from okam_native.bridge import CameraBridge, QuietThreadingHTTPServer, make_handler
 from okam_native.p2p import (
     P2PError,
+    diagnostic_line,
     get_service_parameter,
     open_stream_process,
     resolve_client_id,
@@ -25,6 +26,7 @@ from okam_native.p2p import (
     run_connect_probe,
     run_snapshot_probe,
     run_stream_probe,
+    select_camera_password,
 )
 from okam_native.session import NativeStreamSession
 from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
@@ -32,10 +34,19 @@ from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
 
 DATA = Path("/data")
 VENDOR = DATA / "vendor"
+RUNTIME_ARCH = os.environ.get("OKAM_RUNTIME_ARCH", platform.machine()).lower()
+if RUNTIME_ARCH in {"x86_64", "x64"}:
+    RUNTIME_ARCH = "amd64"
+elif RUNTIME_ARCH in {"arm64", "armv8"}:
+    RUNTIME_ARCH = "aarch64"
 PROBE = Path("/opt/okam/okam-hybris-probe")
-CONNECT_HELPER = Path("/opt/okam/okam-hybris-connect")
+CONNECT_HELPER = Path(
+    "/opt/okam/okam-amd64-connect"
+    if RUNTIME_ARCH == "amd64"
+    else "/opt/okam/okam-hybris-connect"
+)
 FFMPEG = Path("/usr/bin/ffmpeg")
-LIBRARY = VENDOR / "libOKSMARTPPCS.so"
+LIBRARY = Path("/dev/null") if RUNTIME_ARCH == "amd64" else VENDOR / "libOKSMARTPPCS.so"
 STATUS: dict[str, object] = {
     "service": "okam-native-bridge",
     "loader_ready": False,
@@ -93,21 +104,32 @@ def get_bridge() -> CameraBridge | None:
 def load_vendor_runtime() -> None:
     set_status(phase="fetching_vendor_sdk")
     VENDOR.mkdir(parents=True, exist_ok=True)
-    if (
-        not LIBRARY.exists()
-        or not (VENDOR / "libvp_log.so").exists()
-        or not (VENDOR / "device_wakeup_server.dart").exists()
-    ):
+    required = [VENDOR / "device_wakeup_server.dart"]
+    if RUNTIME_ARCH == "aarch64":
+        required.extend((LIBRARY, VENDOR / "libvp_log.so"))
+    if any(not path.exists() for path in required):
+        command = [
+            sys.executable,
+            "/opt/okam/tools/fetch_official_sdk.py",
+            "--destination",
+            str(VENDOR),
+        ]
+        if RUNTIME_ARCH == "amd64":
+            command.append("--wake-only")
         subprocess.run(
-            [
-                sys.executable,
-                "/opt/okam/tools/fetch_official_sdk.py",
-                "--destination",
-                str(VENDOR),
-            ],
+            command,
             check=True,
             timeout=180,
         )
+
+    if RUNTIME_ARCH == "amd64":
+        if not CONNECT_HELPER.is_file():
+            raise RuntimeError("native amd64 P2P helper is unavailable")
+        set_status(loader_ready=True, phase="native_loader_ready", runtime_arch=RUNTIME_ARCH)
+        print("native_loader_ready=true", flush=True)
+        return
+    if RUNTIME_ARCH != "aarch64":
+        raise RuntimeError("Home Assistant architecture is unsupported")
 
     environment = os.environ.copy()
     environment.update(
@@ -130,7 +152,7 @@ def load_vendor_runtime() -> None:
     result = json.loads(completed.stdout)
     if result.get("hybris_load") is not True or not all(result["symbols"].values()):
         raise RuntimeError("native loader did not satisfy every required symbol")
-    set_status(loader_ready=True, phase="native_loader_ready")
+    set_status(loader_ready=True, phase="native_loader_ready", runtime_arch=RUNTIME_ARCH)
     print("native_loader_ready=true", flush=True)
 
 
@@ -177,6 +199,8 @@ def enumerate_account() -> AccountDevice | None:
 
 def p2p_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    if RUNTIME_ARCH == "amd64":
+        return environment
     environment.update(
         {
             "LD_LIBRARY_PATH": "/opt/hybris/lib",
@@ -204,8 +228,9 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
     )
     if not enabled and not auth_enabled and not stream_enabled:
         return
-    if auth_enabled and not device.device_password:
-        raise P2PError("camera device credential was unavailable")
+    camera_password = select_camera_password(
+        device.device_password, options.get("camera_password")
+    )
     credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
     if credentials is None:
         raise WakeError("official wake configuration was unavailable")
@@ -234,7 +259,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 str(FFMPEG),
                 client_id,
                 service_parameter,
-                device.device_password,
+                camera_password,
                 environment=p2p_environment(),
             )
         elif stream_enabled:
@@ -243,7 +268,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 str(LIBRARY),
                 client_id,
                 service_parameter,
-                device.device_password,
+                camera_password,
                 environment=p2p_environment(),
             )
         elif auth_enabled:
@@ -252,7 +277,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 str(LIBRARY),
                 client_id,
                 service_parameter,
-                device.device_password,
+                camera_password,
                 environment=p2p_environment(),
             )
         else:
@@ -285,6 +310,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                     f"clean_disconnect={str(result.disconnected).lower()}",
                     flush=True,
                 )
+                print(diagnostic_line(result), flush=True)
         if stream_enabled:
             set_status(
                 stream_start_sent=result.stream_start_sent,
@@ -333,6 +359,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 f"clean_disconnect={str(result.disconnected).lower()}",
                 flush=True,
             )
+            print(diagnostic_line(result), flush=True)
         if not stream_enabled and auth_enabled and result.connected and result.authenticated and result.disconnected:
             set_status(
                 p2p_ready=True,
@@ -362,6 +389,9 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
     api_token = options.get("api_token")
     alias = options.get("camera_id") or "cabin"
     idle_timeout = options.get("idle_timeout_seconds", 120)
+    camera_password = select_camera_password(
+        device.device_password, options.get("camera_password")
+    )
     if not isinstance(api_token, str) or not 16 <= len(api_token) <= 1024:
         set_status(configuration_required=True, camera_ready=False, phase="api_token_required")
         print("bridge_ready=false configuration_required=api_token", flush=True)
@@ -370,9 +400,6 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
         raise RuntimeError("camera alias is invalid")
     if not isinstance(idle_timeout, int) or not 10 <= idle_timeout <= 600:
         raise RuntimeError("idle timeout is invalid")
-    if not device.device_password:
-        raise P2PError("camera device credential was unavailable")
-
     credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
     if credentials is None:
         raise WakeError("official wake configuration was unavailable")
@@ -395,7 +422,7 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
             str(LIBRARY),
             client_id,
             service_parameter,
-            device.device_password,
+            camera_password,
             environment=p2p_environment(),
         )
 
@@ -420,7 +447,7 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
 
 
 def main() -> int:
-    server = ThreadingHTTPServer(
+    server = QuietThreadingHTTPServer(
         ("0.0.0.0", 8099), make_handler(get_status, get_bridge)
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()

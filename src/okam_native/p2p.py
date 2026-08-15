@@ -9,7 +9,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 
@@ -19,6 +19,7 @@ HTTP_TIMEOUT_SECONDS = 15.0
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_FIELD_BYTES = 4096
 VIRTUAL_ID_PATTERN = re.compile(r"^[A-Za-z]+\d{7,}.*[A-Za-z]$")
+DEFAULT_CAMERA_PASSWORD = "888888"
 
 
 class P2PError(RuntimeError):
@@ -110,14 +111,92 @@ def _field(value: str) -> bytes:
     return struct.pack(">I", len(encoded)) + encoded
 
 
+def select_camera_password(
+    api_password: str | None, configured_password: object = None
+) -> str:
+    """Choose a camera login credential without exposing it in diagnostics.
+
+    O-KAM normally returns this device-level credential during account
+    enumeration. Some account/camera combinations omit it, so an explicit app
+    option takes precedence and the camera's initial value is the final
+    compatibility fallback.
+    """
+
+    if configured_password not in (None, ""):
+        if not isinstance(configured_password, str):
+            raise P2PError("configured camera credential is invalid")
+        _field(configured_password)
+        return configured_password
+    if isinstance(api_password, str) and api_password:
+        _field(api_password)
+        return api_password
+    return DEFAULT_CAMERA_PASSWORD
+
+
+MAX_COUNTER_ENTRIES = 64
+
+
+def _diagnostics(payload: object) -> dict[str, object]:
+    """Extract the sanitized helper diagnostics, dropping anything malformed.
+
+    These fields exist to explain a failure, so a helper that reports them
+    badly must degrade to defaults rather than fail an otherwise valid probe.
+    """
+
+    result: dict[str, object] = {}
+    if not isinstance(payload, dict):
+        return result
+    path = payload.get("connect_path")
+    if isinstance(path, str) and path.isascii() and len(path) <= 32:
+        result["connect_path"] = path
+    candidate = payload.get("login_candidate")
+    if isinstance(candidate, int) and not isinstance(candidate, bool):
+        result["login_candidate"] = candidate
+    attempts = payload.get("login_attempts")
+    if isinstance(attempts, list) and len(attempts) <= 8 and all(
+        item is None or (isinstance(item, int) and not isinstance(item, bool))
+        for item in attempts
+    ):
+        result["login_attempts"] = tuple(attempts)
+    counters = payload.get("counters")
+    if isinstance(counters, dict) and len(counters) <= MAX_COUNTER_ENTRIES and all(
+        isinstance(name, str)
+        and name.isascii()
+        and len(name) <= 64
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+        for name, value in counters.items()
+    ):
+        result["counters"] = dict(counters)
+    return result
+
+
+def _stream_diagnostics(payload: object) -> dict[str, object]:
+    result = _diagnostics(payload)
+    if not isinstance(payload, dict):
+        return result
+    command = payload.get("stream_start_command")
+    if isinstance(command, int) and not isinstance(command, bool):
+        result["stream_start_command"] = command
+    start_result = payload.get("stream_start_result")
+    if isinstance(start_result, int) and not isinstance(start_result, bool):
+        result["stream_start_result"] = start_result
+    return result
+
+
 @dataclass(frozen=True)
 class ConnectResult:
     connected: bool
     connect_state: int
     disconnected: bool
+    connect_path: str = ""
+    counters: dict[str, int] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+# Keyword-only so diagnostic fields with defaults can be inherited by the
+# subclasses below without constraining their field order.
+@dataclass(frozen=True, kw_only=True)
 class AuthenticationResult:
     connected: bool
     connect_state: int
@@ -127,9 +206,13 @@ class AuthenticationResult:
     login_command: int | None
     login_result: int | None
     disconnected: bool
+    connect_path: str = ""
+    login_candidate: int = -1
+    login_attempts: tuple[int | None, ...] = ()
+    counters: dict[str, int] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class StreamProbeResult(AuthenticationResult):
     stream_start_sent: bool
     stream_stop_sent: bool
@@ -138,13 +221,36 @@ class StreamProbeResult(AuthenticationResult):
     h264_bytes: int
     keyframe_seen: bool
     h265_frames: int
+    stream_start_command: int = 0
+    stream_start_result: int | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class SnapshotProbeResult(StreamProbeResult):
     jpeg: bytes
     width: int
     height: int
+
+
+def diagnostic_line(result: object) -> str:
+    """Format one sanitized line of transport evidence for the app log.
+
+    Counts, results, and state names only. Accepts any probe result because
+    the connect probe carries a subset of these fields.
+    """
+
+    attempts = getattr(result, "login_attempts", ()) or ()
+    fields = [
+        "connect_path=" + (getattr(result, "connect_path", "") or "unknown"),
+        f"login_candidate={getattr(result, 'login_candidate', -1)}",
+        "login_attempts="
+        + (",".join("none" if item is None else str(item) for item in attempts) or "-"),
+        f"stream_start_command={getattr(result, 'stream_start_command', 0)}",
+        f"stream_start_result={getattr(result, 'stream_start_result', None)}",
+    ]
+    counters = getattr(result, "counters", None) or {}
+    fields.extend(f"{name}={value}" for name, value in sorted(counters.items()))
+    return "transport_diagnostics " + " ".join(fields)
 
 
 def run_connect_probe(
@@ -181,7 +287,12 @@ def run_connect_probe(
         raise P2PError("native P2P helper returned an invalid result")
     if completed.returncode not in {0, 4}:
         raise P2PError("native P2P helper failed safely")
-    return ConnectResult(connected=connected, connect_state=state, disconnected=disconnected)
+    return ConnectResult(
+        connected=connected,
+        connect_state=state,
+        disconnected=disconnected,
+        **_diagnostics(payload),  # type: ignore[arg-type]
+    )
 
 
 def run_authentication_probe(
@@ -240,6 +351,7 @@ def run_authentication_probe(
         login_command=command,
         login_result=result,
         disconnected=payload["disconnected"],
+        **_diagnostics(payload),  # type: ignore[arg-type]
     )
 
 
@@ -320,6 +432,7 @@ def _stream_result(payload: object, returncode: int) -> StreamProbeResult:
         h264_bytes=payload["h264_bytes"],
         keyframe_seen=payload["keyframe_seen"],
         h265_frames=payload["h265_frames"],
+        **_stream_diagnostics(payload),  # type: ignore[arg-type]
     )
 
 
@@ -460,6 +573,12 @@ def run_snapshot_probe(
         h264_bytes=stream.h264_bytes,
         keyframe_seen=stream.keyframe_seen,
         h265_frames=stream.h265_frames,
+        connect_path=stream.connect_path,
+        login_candidate=stream.login_candidate,
+        login_attempts=stream.login_attempts,
+        counters=stream.counters,
+        stream_start_command=stream.stream_start_command,
+        stream_start_result=stream.stream_start_result,
         jpeg=jpeg,
         width=width,
         height=height,

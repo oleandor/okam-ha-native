@@ -1,9 +1,8 @@
 # O-KAM Native Bridge for Home Assistant
 
 O-KAM Native Bridge connects an O-KAM Pro camera directly to Home Assistant on
-a 64-bit ARM (`aarch64`) system. Live video, snapshots, camera wake-up, and
-disconnects are handled locally by Home Assistant; no additional computer or
-phone connection is required during normal operation.
+64-bit ARM (`aarch64`) and x86-64 (`amd64`) systems. Live video, snapshots,
+camera wake-up, and disconnects are handled by the Home Assistant host.
 
 The project contains both required parts:
 
@@ -14,7 +13,7 @@ The project contains both required parts:
 
 ## Features
 
-- Native ARM64 operation with no desktop or emulation layer
+- Native operation on `aarch64` and `amd64` with no desktop or emulation layer
 - Live H.264 video in Home Assistant
 - Full-resolution JPEG snapshots
 - Automatic wake-up for battery cameras
@@ -27,19 +26,25 @@ The project contains both required parts:
 
 ## Requirements
 
-- A 64-bit ARM (`aarch64`) Home Assistant system
+- A Home Assistant system reporting the `aarch64` or `amd64` architecture
 - An O-KAM Pro camera that works in the O-KAM mobile app
 - An O-KAM account that can view exactly one camera; the account may own the
   camera or have it shared to it
 - HACS for the easiest integration installation, or access to
   `/config/custom_components` for manual installation
 
-The app is published for `aarch64`, rather than for specific board names. It
-has been physically validated on Raspberry Pi 4. Raspberry Pi 3 can install it
-when running a 64-bit Home Assistant OS image, although its lower performance
-has not been validated. Raspberry Pi 1 and 2 are not supported because their
-Home Assistant configurations are 32-bit. Raspberry Pi 5 and other `aarch64`
-Home Assistant systems are eligible to install the same prebuilt image.
+The app is published as one multi-architecture image:
+
+| Home Assistant architecture | Typical systems |
+| --- | --- |
+| `aarch64` | Raspberry Pi 3, 4, or 5 running a 64-bit OS; other 64-bit ARM hosts |
+| `amd64` | Intel or AMD mini PCs, servers, and virtual machines |
+
+Raspberry Pi 4 is physically validated. Raspberry Pi 3 is eligible when it is
+running a 64-bit Home Assistant installation, but its lower performance has not
+been measured. A 32-bit installation cannot install this app. Check the value
+shown under **Settings → System → Repairs → System information → Architecture**
+if you are unsure.
 
 ## Installation
 
@@ -71,6 +76,7 @@ configuration.
    | --- | --- |
    | `account_username` | Email address of the O-KAM account |
    | `account_password` | Password of the O-KAM account |
+   | `camera_password` | Normally leave blank; optional camera-level password override |
    | `api_token` | A new random secret of at least 16 characters that you choose |
    | `camera_id` | Local camera alias, for example `cabin` |
    | `idle_timeout_seconds` | `120` seconds is recommended |
@@ -90,6 +96,12 @@ configuration.
 The API token is a local secret created by you. It is not supplied by O-KAM and
 must not be the O-KAM account password. You will enter the same token in the
 integration.
+
+The bridge normally obtains the camera-level password automatically from
+O-KAM. If that value is omitted for your account, it tries the camera's common
+initial value automatically. Only set `camera_password` when the app log reports
+a camera-authentication failure and the camera uses a different local password.
+This is not the O-KAM account password.
 
 ### 3. Install the Home Assistant integration
 
@@ -202,11 +214,14 @@ See [SECURITY.md](SECURITY.md) for the complete security policy.
 
 ## Technical overview
 
-The app enumerates the camera through the fixed official account
-service, wakes it through the official low-power service, and opens the camera's
-native ARM64 P2P transport. H.264 is forwarded directly to Home Assistant.
-FFmpeg is invoked only when a JPEG snapshot is requested. Vendor runtime files
-are downloaded from their pinned official source and verified before use.
+The app enumerates the camera through the fixed official account service,
+wakes it through the official low-power service, and opens a native P2P
+transport. On `aarch64`, a minimal Bionic compatibility layer hosts the official
+ARM64 transport library. On `amd64`, a small pure-Python client implements the
+same encrypted camera protocol directly. H.264 is forwarded to Home Assistant
+without transcoding. FFmpeg is invoked only when a JPEG snapshot is requested.
+Required official artifacts are downloaded from their pinned source and
+verified before use.
 
 More detail is available in [Architecture](docs/architecture.md).
 

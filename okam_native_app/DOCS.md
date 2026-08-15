@@ -1,7 +1,7 @@
 # O-KAM Native Bridge
 
 O-KAM Native Bridge connects one O-KAM Pro camera directly to Home Assistant on
-a 64-bit ARM (`aarch64`) system. It provides live H.264 video, JPEG snapshots,
+`aarch64` and `amd64` systems. It provides live H.264 video, JPEG snapshots,
 automatic camera wake-up, shared viewing, and automatic idle disconnect.
 
 ## Before configuring the app
@@ -16,12 +16,18 @@ that account in the O-KAM app once and confirm that live view works.
 | --- | --- |
 | `account_username` | Email address of the O-KAM account |
 | `account_password` | Password of the O-KAM account |
+| `camera_password` | Optional camera-level password override; normally leave blank |
 | `api_token` | A random local secret of at least 16 characters chosen by you |
 | `camera_id` | Home Assistant camera alias, for example `cabin` |
 | `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `120` is recommended |
 
 The API token is not an O-KAM credential. Create a new random value and enter
 the identical value when adding the Home Assistant integration.
+
+The app normally obtains the camera-level credential automatically and has a
+compatibility fallback for accounts that omit it. Set `camera_password` only
+when camera authentication fails and the camera uses a changed local password.
+It is not the O-KAM account password.
 
 Leave `run_connect_test`, `run_auth_test`, `run_stream_test`, and
 `run_snapshot_test` disabled during normal operation. They are bounded

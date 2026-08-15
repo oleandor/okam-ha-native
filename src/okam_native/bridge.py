@@ -6,8 +6,11 @@ import hmac
 import json
 import re
 import secrets
+import subprocess
+import sys
+import threading
 from collections.abc import Callable
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlsplit
 
 from .p2p import P2PError
@@ -15,7 +18,39 @@ from .session import NativeStreamSession
 
 
 MAX_REQUEST_BYTES = 4096
+STREAM_CHUNK_BYTES = 32 * 1024
+# A client going away mid-request is normal here: the supervisor polls the
+# bridge, and media consumers disconnect whenever a view closes.
+_EXPECTED_DISCONNECTS = (
+    BrokenPipeError,
+    ConnectionAbortedError,
+    ConnectionResetError,
+    TimeoutError,
+)
 HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[0-9]{1,5})?$")
+
+
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """An HTTP server that does not report a dropped client as a crash.
+
+    The default handler prints a full traceback and the peer address whenever a
+    client disconnects mid-request. The supervisor polls this bridge and closes
+    connections abruptly, which filled the app log with alarming
+    ConnectionResetError tracebacks for entirely normal behaviour.
+    """
+
+    daemon_threads = True
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        error = sys.exc_info()[1]
+        if isinstance(error, _EXPECTED_DISCONNECTS):
+            return
+        # Type only: the peer address is never logged.
+        print(
+            f"bridge_request_failed error={type(error).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 class CameraBridge:
@@ -50,7 +85,7 @@ class CameraBridge:
         safe_host = host if isinstance(host, str) and HOST_PATTERN.fullmatch(host) else "127.0.0.1:8099"
         camera = quote(self.camera_id, safe="")
         token = quote(self._stream_token, safe="")
-        return f"http://{safe_host}/api/cameras/{camera}/stream.h264?token={token}"
+        return f"http://{safe_host}/api/cameras/{camera}/stream.ts?token={token}"
 
     def status(self) -> dict[str, object]:
         session = self.session.status()
@@ -126,12 +161,18 @@ def make_handler(
                 self._json(503, {"error": "bridge_not_ready"})
                 return
             camera_prefix = f"/api/cameras/{quote(bridge.camera_id, safe='')}"
-            if parsed.path == f"{camera_prefix}/stream.h264":
+            if parsed.path in (
+                f"{camera_prefix}/stream.h264",
+                f"{camera_prefix}/stream.ts",
+            ):
                 token = parse_qs(parsed.query).get("token", [None])[0]
                 if not bridge.stream_authenticated(token):
                     self._json(401, {"error": "unauthorized"})
                     return
-                self._raw_stream(bridge)
+                if parsed.path.endswith("/stream.ts"):
+                    self._muxed_stream(bridge)
+                else:
+                    self._raw_stream(bridge)
                 return
             if not bridge.authenticated(self.headers.get("Authorization")):
                 self._json(401, {"error": "unauthorized"})
@@ -228,6 +269,92 @@ def make_handler(
                 pass
             finally:
                 subscription.close()
+
+        def _muxed_stream(self, bridge: CameraBridge) -> None:
+            """Serve the live stream as MPEG-TS.
+
+            A raw Annex-B elementary stream carries no timestamps, and Home
+            Assistant's stream worker rejects it with "No dts in N consecutive
+            packets", so live view never produces segments. Muxing to MPEG-TS
+            with wall-clock timestamps gives it what it needs, without
+            re-encoding.
+            """
+
+            try:
+                subscription = bridge.session.acquire()
+            except P2PError:
+                self._json(503, {"error": "stream_unavailable"})
+                return
+            muxer: subprocess.Popen[bytes] | None = None
+            writer: threading.Thread | None = None
+            try:
+                muxer = subprocess.Popen(
+                    [
+                        bridge.ffmpeg,
+                        "-hide_banner",
+                        "-loglevel", "error",
+                        "-fflags", "+genpts",
+                        "-use_wallclock_as_timestamps", "1",
+                        "-f", "h264",
+                        "-i", "pipe:0",
+                        "-c:v", "copy",
+                        "-f", "mpegts",
+                        "-muxdelay", "0",
+                        "-muxpreload", "0",
+                        "pipe:1",
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    bufsize=0,
+                )
+            except (OSError, subprocess.SubprocessError):
+                subscription.close()
+                self._json(503, {"error": "stream_unavailable"})
+                return
+            assert muxer.stdin is not None and muxer.stdout is not None
+
+            def feed() -> None:
+                try:
+                    for chunk in subscription:
+                        muxer.stdin.write(chunk)  # type: ignore[union-attr]
+                        muxer.stdin.flush()  # type: ignore[union-attr]
+                except (BrokenPipeError, ConnectionError, OSError, ValueError):
+                    pass
+                finally:
+                    try:
+                        muxer.stdin.close()  # type: ignore[union-attr]
+                    except OSError:
+                        pass
+
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp2t")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                writer = threading.Thread(target=feed, daemon=True)
+                writer.start()
+                while True:
+                    piece = muxer.stdout.read(STREAM_CHUNK_BYTES)
+                    if not piece:
+                        break
+                    self.wfile.write(piece)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionError, OSError):
+                pass
+            finally:
+                subscription.close()
+                if muxer.poll() is None:
+                    muxer.terminate()
+                    try:
+                        muxer.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        muxer.kill()
+                        muxer.wait(timeout=5)
+                if writer is not None:
+                    writer.join(timeout=2)
 
         def _request_json(self) -> dict[str, object] | None:
             try:

@@ -1,8 +1,8 @@
 # Architecture
 
 O-KAM Native Bridge is composed of a Home Assistant app and a custom
-integration. Both are distributed from this repository and use matching
-release versions.
+integration. Both are distributed from this repository, support `aarch64` and
+`amd64`, and use matching release versions.
 
 ## Data flow
 
@@ -15,7 +15,7 @@ O-KAM Native Bridge app
         │
         ├── account enumeration and low-power wake
         │
-        └── native ARM64 P2P session
+        └── native P2P session
                     │
                     ▼
               O-KAM camera
@@ -44,11 +44,16 @@ chunks instead of allowing unbounded memory growth.
 
 ## Native runtime
 
-The camera transport library targets Android ARM64/Bionic. The container uses a
-small, checksum-pinned runtime consisting of the required Bionic libraries,
-`libhybris-common`, and the measured compatibility stubs needed by the vendor
-library. It does not contain a desktop environment or a general Android
-runtime.
+The container selects a transport at build time for the Home Assistant host:
+
+| Architecture | Native transport |
+| --- | --- |
+| `aarch64` | The official Android ARM64 camera library with a small, checksum-pinned Bionic and `libhybris` compatibility layer |
+| `amd64` | A pure-Python implementation of the camera's encrypted CS2/PPPP UDP transport and command protocol |
+
+Both transports implement the same credential-safe helper contract and feed
+the same session, API, snapshot, and lifecycle code. Neither image contains a
+desktop environment or a general-purpose emulation runtime.
 
 Live video is forwarded without transcoding. The bundled minimal FFmpeg build
 contains only the H.264 decoder, MJPEG encoder, pipe protocols, image-pipe
@@ -74,9 +79,10 @@ sanitized.
 
 ## Distribution
 
-GitHub Actions builds the image only for `linux/arm64` and publishes matching
-version and `latest` tags to GitHub Container Registry. Home Assistant downloads
-the prebuilt image, so the Raspberry Pi does not compile the native runtime.
+GitHub Actions builds `linux/arm64` and `linux/amd64` images, then publishes one
+multi-architecture version tag and `latest` tag to GitHub Container Registry.
+Home Assistant selects and downloads the matching prebuilt image, so the host
+does not compile the native runtime.
 
 The custom integration lives at `custom_components/okam`, which permits HACS or
 manual installation from the same release.

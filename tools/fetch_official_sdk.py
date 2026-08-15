@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch and extract only the required ARM64 library from the official SDK."""
+"""Fetch and extract the required verified artifacts from the official SDK."""
 
 from __future__ import annotations
 
@@ -91,10 +91,26 @@ def extract_arm64(sdk_zip: Path, destination: Path) -> tuple[Path, Path, Path]:
     return output, log_output, wake_output
 
 
+def extract_wake_source(sdk_zip: Path, destination: Path) -> Path:
+    """Extract only the architecture-independent wake service definition."""
+
+    with zipfile.ZipFile(sdk_zip) as sdk:
+        wake_source = _unique_suffix_payload(sdk, WAKE_SOURCE_SUFFIX)
+    destination.mkdir(parents=True, exist_ok=True)
+    wake_output = destination / "device_wakeup_server.dart"
+    wake_output.write_bytes(wake_source)
+    return wake_output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, default=ROOT / ".vendor" / "arm64")
     parser.add_argument("--archive", type=Path, help="use an existing SDK ZIP instead of downloading")
+    parser.add_argument(
+        "--wake-only",
+        action="store_true",
+        help="extract only the architecture-independent wake service definition",
+    )
     args = parser.parse_args()
     artifact = json.loads(MANIFEST.read_text(encoding="utf-8"))["artifacts"][0]
     temporary: Path | None = None
@@ -112,14 +128,21 @@ def main() -> int:
         actual = sha256(archive)
         if actual.lower() != artifact["sha256"].lower():
             raise RuntimeError(f"SDK checksum mismatch: expected {artifact['sha256']}, got {actual}")
-        output, log_output, wake_output = extract_arm64(archive, args.destination.resolve())
-        print(json.dumps({
-            "libraries": [
-                {"path": str(output), "sha256": sha256(output)},
-                {"path": str(log_output), "sha256": sha256(log_output)},
-            ],
-            "wake_source": str(wake_output),
-        }, sort_keys=True))
+        if args.wake_only:
+            wake_output = extract_wake_source(archive, args.destination.resolve())
+            result = {"libraries": [], "wake_source": str(wake_output)}
+        else:
+            output, log_output, wake_output = extract_arm64(
+                archive, args.destination.resolve()
+            )
+            result = {
+                "libraries": [
+                    {"path": str(output), "sha256": sha256(output)},
+                    {"path": str(log_output), "sha256": sha256(log_output)},
+                ],
+                "wake_source": str(wake_output),
+            }
+        print(json.dumps(result, sort_keys=True))
         return 0
     finally:
         if temporary:

@@ -7,13 +7,17 @@ import pytest
 
 from okam_native.p2p import (
     _jpeg_dimensions,
+    _stream_result,
+    ConnectResult,
     P2PError,
+    diagnostic_line,
     get_service_parameter,
     open_stream_process,
     resolve_client_id,
     run_authentication_probe,
     run_connect_probe,
     run_stream_probe,
+    select_camera_password,
 )
 
 
@@ -88,6 +92,26 @@ def test_directory_errors_do_not_expose_identifier() -> None:
     with pytest.raises(P2PError) as caught:
         get_service_parameter("ABCD-sensitive-device-id", opener=opener)
     assert "sensitive-device-id" not in str(caught.value)
+
+
+def test_camera_password_prefers_explicit_override() -> None:
+    assert select_camera_password("account-value", "configured-value") == "configured-value"
+
+
+def test_camera_password_uses_enumerated_value_when_available() -> None:
+    assert select_camera_password("account-value") == "account-value"
+
+
+def test_camera_password_uses_safe_default_when_account_omits_it() -> None:
+    assert select_camera_password("") == "888888"
+    assert select_camera_password(None, "") == "888888"
+
+
+def test_camera_password_rejects_invalid_override_without_echoing_it() -> None:
+    secret = "invalid\nsecret"
+    with pytest.raises(P2PError) as caught:
+        select_camera_password(None, secret)
+    assert secret not in str(caught.value)
 
 
 def test_authentication_probe_passes_all_sensitive_fields_only_on_stdin(monkeypatch) -> None:
@@ -210,3 +234,88 @@ def test_open_stream_process_keeps_sensitive_fields_out_of_argv(monkeypatch) -> 
     assert recorded["command"] == ["/helper", "/library", "--stream-stdout"]
     assert b"sensitive-device-password" in recorded["input"]
     assert "sensitive-device-password" not in " ".join(recorded["command"])
+
+
+def _stream_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "connected": True,
+        "connect_state": 3,
+        "login_sent": True,
+        "login_response_received": True,
+        "authenticated": True,
+        "login_command": 0x6001,
+        "login_result": 0,
+        "disconnected": True,
+        "stream_start_sent": True,
+        "stream_stop_sent": True,
+        "h264_received": False,
+        "h264_frames": 0,
+        "h264_bytes": 0,
+        "keyframe_seen": False,
+        "h265_frames": 0,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_stream_result_carries_transport_diagnostics() -> None:
+    result = _stream_result(
+        _stream_payload(
+            connect_path="direct-punch",
+            login_candidate=2,
+            login_attempts=[-1, None, 0],
+            stream_start_command=0x60D1,
+            stream_start_result=0,
+            counters={"channel0_bytes": 96, "channel1_bytes": 0},
+        ),
+        0,
+    )
+
+    assert result.connect_path == "direct-punch"
+    assert result.login_candidate == 2
+    assert result.login_attempts == (-1, None, 0)
+    assert result.stream_start_result == 0
+    assert result.counters == {"channel0_bytes": 96, "channel1_bytes": 0}
+
+
+@pytest.mark.parametrize(
+    "counters",
+    [
+        {"channel1_bytes": -1},
+        {"channel1_bytes": "many"},
+        {"channel1_bytes": True},
+        [("channel1_bytes", 1)],
+        {str(index): index for index in range(65)},
+    ],
+)
+def test_malformed_counters_degrade_instead_of_failing_the_probe(counters: object) -> None:
+    # Diagnostics explain a failure, so they must never cause one.
+    result = _stream_result(_stream_payload(counters=counters), 0)
+
+    assert result.counters == {}
+    assert result.connected is True
+
+
+def test_diagnostic_line_is_counts_only_and_survives_partial_results() -> None:
+    connect_only = ConnectResult(
+        connected=True,
+        connect_state=3,
+        disconnected=True,
+        connect_path="relay",
+        counters={"packets_from_other_source": 7, "channel1_bytes": 0},
+    )
+
+    line = diagnostic_line(connect_only)
+
+    assert line.startswith("transport_diagnostics ")
+    assert "connect_path=relay" in line
+    assert "channel1_bytes=0 packets_from_other_source=7" in line
+    assert "login_attempts=-" in line
+
+
+def test_diagnostic_line_renders_silent_login_candidates() -> None:
+    result = _stream_result(
+        _stream_payload(login_attempts=[-1, None], counters={}), 0
+    )
+
+    assert "login_attempts=-1,none" in diagnostic_line(result)

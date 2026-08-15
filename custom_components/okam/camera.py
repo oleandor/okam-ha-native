@@ -36,6 +36,7 @@ class OkamCamera(OkamEntity, Camera):
         self._api = runtime.api
         self._attr_name = runtime.coordinator.camera_id
         self._attr_unique_id = f"{runtime.coordinator.camera_id}_camera"
+        self.internal_integration_suggested_object_id = runtime.coordinator.camera_id
         self._bridge_state = str(runtime.coordinator.data.get("state", "idle"))
         self._wake_watcher: asyncio.Task[None] | None = None
         self._last_snapshot: bytes | None = None
