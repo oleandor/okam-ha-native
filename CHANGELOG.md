@@ -21,6 +21,9 @@
 - Notifies every endpoint a session touched when closing, and acknowledges a
   declined direct readiness request, so a camera does not hold a stale binding
   that blocks the next connection.
+- Accepts relay media when NAT renumbers the peer's source port, which
+  previously discarded the entire media channel while control traffic
+  continued to work.
 - Starts a newly opened live view on a decodable boundary by caching the
   stream's parameter sets and newest keyframe. Opening a second view of an
   already-streaming camera no longer waits for the camera's next keyframe.

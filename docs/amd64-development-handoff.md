@@ -316,10 +316,24 @@ does not currently point to a missing TCP relay implementation.
 
 ## Required release gates
 
-Current status: gates 1 to 6 are met on a development host and verified
-repeatedly. Gates 7 to 11 need environments not available during this work —
-an amd64 Home Assistant installation, a container build, the physical
-Raspberry Pi, and a registry push.
+Current status: gates 1 to 7 are met. Gates 1 to 6 were verified repeatedly on
+a development host. Gate 7 was verified with a locally built `linux/amd64`
+image: the bridge HTTP endpoint served an Annex-B stream containing SPS, PPS,
+and a keyframe, and produced a 2304x1296 JPEG snapshot.
+
+Gate 7 initially failed in the container while the same code worked on the
+host, and the cause was worth recording. The receive loop matched the session
+peer on address **and port**, so media arriving from a neighbouring source port
+was discarded. Behind container NAT that was the entire media channel: the
+session reached the relay and authenticated, then counted 272 packets as
+foreign and delivered no video. The same defect showed up as a handful of
+dropped packets on the host, which is why it looked negligible for so long.
+Inbound packets are now matched on the peer host, and the port drift is
+counted.
+
+Gates 8 to 11 still need environments not available during this work — a real
+amd64 Home Assistant installation with the integration configured, the physical
+Raspberry Pi, CI, and a registry push.
 
 **Gate 9 now matters more than it did.** The relay work is confined to
 `cs2.py`, which is amd64-only, but the live-view priming changed
