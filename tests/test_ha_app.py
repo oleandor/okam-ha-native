@@ -121,3 +121,23 @@ def test_user_documentation_is_current_and_complete() -> None:
     assert "secondary" not in lowered
     assert "aarch64" in lowered
     assert "amd64" in lowered
+
+
+def test_image_refuses_a_runtime_stage_that_mismatches_the_platform() -> None:
+    # A build that omits TARGETARCH selects the amd64 runtime whatever the
+    # platform, which would ship an arm64 image with no official transport.
+    dockerfile = (ROOT / "okam_native_app" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "FROM runtime-${TARGETARCH} AS final" in dockerfile
+    assert "does not match platform" in dockerfile
+    assert 'aarch64) expected=arm64' in dockerfile
+
+
+def test_publish_workflow_passes_the_runtime_stage_selector() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish-image.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "TARGETARCH=${{ matrix.docker_arch }}" in workflow
+    assert "docker_arch: arm64" in workflow
+    assert "docker_arch: amd64" in workflow

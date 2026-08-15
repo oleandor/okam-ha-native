@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1.7
+# The default keeps plain builds working, but it also shadows the value
+# BuildKit would supply, so a build that omits TARGETARCH selects this stage
+# regardless of --platform. The final stage asserts the two agree.
 ARG TARGETARCH=amd64
 FROM debian:bookworm-slim AS native-build-arm64
 
@@ -124,3 +127,17 @@ COPY --from=native-build-arm64 /out/okam-hybris-probe /opt/okam/okam-hybris-prob
 COPY --from=native-build-arm64 /out/okam-hybris-connect /opt/okam/okam-hybris-connect
 
 FROM runtime-${TARGETARCH} AS final
+# Fail loudly if the selected runtime stage does not match the image platform.
+# Without this an arm64 build that omits TARGETARCH silently ships the amd64
+# runtime, which has no official transport library and cannot stream.
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64) expected=amd64 ;; \
+      aarch64) expected=arm64 ;; \
+      *) echo "unsupported build architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    if [ "${OKAM_RUNTIME_ARCH}" != "${expected}" ]; then \
+      echo "runtime stage '${OKAM_RUNTIME_ARCH}' does not match platform '${expected}';" >&2; \
+      echo "pass --build-arg TARGETARCH=${expected}" >&2; \
+      exit 1; \
+    fi
