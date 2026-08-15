@@ -206,3 +206,12 @@ def test_watchdog_targets_a_declared_container_port() -> None:
         assert watched is not None, name
         declared = set(re.findall(r"^  (\d+)/tcp:", config, re.MULTILINE))
         assert watched.group(1) in declared, name
+
+
+def test_addon_changelog_matches_the_repository_changelog() -> None:
+    # The supervisor only shows release notes from a CHANGELOG.md inside the
+    # app directory, so it is a copy. Keep the copy honest.
+    root = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    packaged = (ROOT / "okam_native_app" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    assert packaged == root
