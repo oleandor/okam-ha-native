@@ -1,0 +1,38 @@
+name: O-KAM Native Bridge (test)
+version: 1.2.0-test1
+slug: okam_native_test
+description: Temporary local add-on for testing a candidate build alongside the installed one
+url: https://github.com/oleandor/okam-ha-native
+image: ghcr.io/oleandor/okam-ha-native
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: manual
+watchdog: http://[HOST]:[PORT:8098]/health
+ports:
+  8099/tcp: 8098
+ports_description:
+  8099/tcp: Native runtime status API (test instance)
+options:
+  account_username: null
+  account_password: null
+  camera_password: null
+  api_token: null
+  camera_id: cabintest
+  idle_timeout_seconds: 120
+  run_connect_test: false
+  run_auth_test: false
+  run_stream_test: false
+  run_snapshot_test: false
+schema:
+  account_username: email
+  account_password: password
+  camera_password: password
+  api_token: password
+  camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
+  idle_timeout_seconds: "int(10,600)"
+  run_connect_test: bool
+  run_auth_test: bool
+  run_stream_test: bool
+  run_snapshot_test: bool

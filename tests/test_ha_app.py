@@ -66,8 +66,8 @@ def test_publish_workflow_builds_one_multi_architecture_image() -> None:
     assert "BUILD_ARCH=${{ matrix.ha_arch }}" in workflow
     assert "TARGETARCH=${{ matrix.docker_arch }}" in workflow
     assert "docker buildx imagetools create" in workflow
-    assert 'version-aarch64"' in workflow
-    assert 'version-amd64"' in workflow
+    assert '$VERSION-aarch64"' in workflow
+    assert '$VERSION-amd64"' in workflow
 
 
 def test_repository_contains_camera_integration_for_native_api() -> None:
@@ -152,3 +152,29 @@ def test_image_ffmpeg_can_mux_the_live_stream() -> None:
     assert "--enable-muxer=mpegts" in dockerfile
     assert "--enable-muxer=image2pipe" in dockerfile
     assert "--enable-demuxer=h264" in dockerfile
+
+
+def test_latest_tag_only_ever_follows_main() -> None:
+    # A test build published from a branch must not repoint the tag that
+    # installations track.
+    workflow = (ROOT / ".github" / "workflows" / "publish-image.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'GITHUB_REF}" = "refs/heads/main"' in workflow
+    assert 'if [ "$MOVE_LATEST" = "true" ]' in workflow
+    assert "tag_suffix" in workflow
+
+
+def test_test_addon_cannot_collide_with_the_installed_one() -> None:
+    installed = (ROOT / "okam_native_app" / "config.yaml").read_text(encoding="utf-8")
+    candidate = (
+        ROOT / "okam_native_app" / "test-addon" / "config.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "slug: okam_native\n" in installed
+    assert "slug: okam_native_test\n" in candidate
+    # Distinct host port, so both can run side by side.
+    assert "8099/tcp: 8099" in installed
+    assert "8099/tcp: 8098" in candidate
+    assert "boot: manual" in candidate

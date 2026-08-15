@@ -14,6 +14,16 @@ on:
       - "docs/vendor-artifacts.json"
       - ".github/workflows/publish-image.yml"
   workflow_dispatch:
+    inputs:
+      tag_suffix:
+        description: "Suffix for a test build, e.g. test1. Empty publishes the plain version."
+        required: false
+        default: ""
+      move_latest:
+        description: "Also move the latest tag. Ignored unless run from main."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -28,13 +38,31 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.app.outputs.version }}
+      move_latest: ${{ steps.app.outputs.move_latest }}
     steps:
       - uses: actions/checkout@v6
       - name: Read app version
         id: app
         shell: bash
+        env:
+          TAG_SUFFIX: ${{ inputs.tag_suffix }}
+          REQUEST_LATEST: ${{ inputs.move_latest }}
         run: |
-          echo "version=$(sed -n 's/^version: //p' okam_native_app/config.yaml)" >> "$GITHUB_OUTPUT"
+          set -eu
+          base="$(sed -n 's/^version: //p' okam_native_app/config.yaml)"
+          if [ -n "${TAG_SUFFIX:-}" ]; then
+            echo "version=${base}-${TAG_SUFFIX}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${base}" >> "$GITHUB_OUTPUT"
+          fi
+          # latest must only ever follow main. A test build published from a
+          # branch must not repoint the tag that installations track.
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] \
+             && { [ "${GITHUB_EVENT_NAME}" = "push" ] || [ "${REQUEST_LATEST:-false}" = "true" ]; }; then
+            echo "move_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "move_latest=false" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     needs: prepare
@@ -86,11 +114,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish multi-architecture manifests
         shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          MOVE_LATEST: ${{ needs.prepare.outputs.move_latest }}
         run: |
-          version="${{ needs.prepare.outputs.version }}"
+          set -eu
           image="ghcr.io/oleandor/okam-ha-native"
-          docker buildx imagetools create \
-            --tag "$image:$version" \
-            --tag "$image:latest" \
-            "$image:$version-aarch64" \
-            "$image:$version-amd64"
+          tags=(--tag "$image:$VERSION")
+          if [ "$MOVE_LATEST" = "true" ]; then
+            tags+=(--tag "$image:latest")
+          else
+            echo "Leaving :latest untouched; publishing $VERSION only."
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            "$image:$VERSION-aarch64" \
+            "$image:$VERSION-amd64"
+          docker buildx imagetools inspect "$image:$VERSION"
