@@ -374,7 +374,28 @@ required two fixes worth remembering:
   muxer and the muxer exited immediately. Any future change to that build must
   keep the muxers the bridge depends on.
 
-Gates 9 to 11 still need environments not available during this work — a real
+Gate 9 is met. A `1.2.0-test1` build was installed on the physical Raspberry
+Pi 4 as a local app beside the released one, on a separate port and slug. The
+official aarch64 transport loaded, the account enumerated, the bridge came up,
+and the camera entity produced snapshots and **played live video**, with a
+faster second open from the cached keyframe.
+
+Three configuration defects surfaced only on real hardware and are fixed:
+
+- The camera password option could not be left empty. It was declared required,
+  and its null default kept the key present and invalid even once optional, so
+  the supervisor refused to save with "Missing required option". No placeholder
+  was safe either, since any value overrides the enumerated credential. This
+  is the same path as issue #5.
+- Editing an installed app's `config.yaml` does not rebind its schema, so the
+  app must be reinstalled after such a change.
+- A watchdog pointing at a host port rather than a declared container port never
+  resolves, and the supervisor restarts the app underneath a live stream. This
+  affected only the test app configuration.
+
+Gates 10 and 11 remain. Gate 10 passes on every push. Gate 11 needs a release
+
+ — a real
 amd64 Home Assistant installation with the integration configured, the physical
 Raspberry Pi, CI, and a registry push.
 
