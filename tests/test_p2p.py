@@ -14,6 +14,7 @@ from okam_native.p2p import (
     run_authentication_probe,
     run_connect_probe,
     run_stream_probe,
+    select_camera_password,
 )
 
 
@@ -88,6 +89,26 @@ def test_directory_errors_do_not_expose_identifier() -> None:
     with pytest.raises(P2PError) as caught:
         get_service_parameter("ABCD-sensitive-device-id", opener=opener)
     assert "sensitive-device-id" not in str(caught.value)
+
+
+def test_camera_password_prefers_explicit_override() -> None:
+    assert select_camera_password("account-value", "configured-value") == "configured-value"
+
+
+def test_camera_password_uses_enumerated_value_when_available() -> None:
+    assert select_camera_password("account-value") == "account-value"
+
+
+def test_camera_password_uses_safe_default_when_account_omits_it() -> None:
+    assert select_camera_password("") == "888888"
+    assert select_camera_password(None, "") == "888888"
+
+
+def test_camera_password_rejects_invalid_override_without_echoing_it() -> None:
+    secret = "invalid\nsecret"
+    with pytest.raises(P2PError) as caught:
+        select_camera_password(None, secret)
+    assert secret not in str(caught.value)
 
 
 def test_authentication_probe_passes_all_sensitive_fields_only_on_stdin(monkeypatch) -> None:

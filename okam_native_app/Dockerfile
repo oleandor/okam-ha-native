@@ -1,13 +1,12 @@
 # syntax=docker/dockerfile:1.7
-FROM debian:bookworm-slim AS native-build
+ARG TARGETARCH=amd64
+FROM debian:bookworm-slim AS native-build-arm64
 
-ARG TARGETARCH
 ARG LIBHYBRIS_COMMIT=7079712a42ea2754adf747e70c6cc75764c8596e
 ARG AOSP_URL=https://dl.google.com/android/repository/sys-img/android/arm64-v8a-28_r02.zip
 ARG AOSP_SHA1=e209114dd0dfc2f4e0d328f5fd7367fec39ee1bd
 
-RUN test "$TARGETARCH" = "arm64" \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       android-libcutils-dev android-platform-frameworks-native-headers \
       android-platform-system-core-headers autoconf automake ca-certificates \
@@ -58,7 +57,7 @@ FROM debian:bookworm-slim AS ffmpeg-build
 ARG FFMPEG_VERSION=8.1.2
 ARG FFMPEG_SHA256=9fd092511605bbebafe095ea6d38d9e40f34d12f7386e1258372df8be0576eb7
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev make \
+    && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev make nasm \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_VERSION}.tar.gz" -o /tmp/ffmpeg.tar.gz \
     && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.gz" | sha256sum -c - \
@@ -90,9 +89,9 @@ RUN cd "/tmp/FFmpeg-n${FFMPEG_VERSION}" \
     && mkdir -p /out/ffmpeg/bin \
     && cp ffmpeg /out/ffmpeg/bin/ffmpeg
 
-FROM python:3.12-slim-bookworm
-ARG BUILD_VERSION=1.1.1
-ARG BUILD_ARCH=aarch64
+FROM python:3.12-slim-bookworm AS runtime-base
+ARG BUILD_VERSION=1.2.0
+ARG BUILD_ARCH
 LABEL io.hass.version=$BUILD_VERSION \
       io.hass.arch=$BUILD_ARCH \
       io.hass.type="app" \
@@ -102,16 +101,26 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=native-build /out/hybris /opt/hybris
-COPY --from=native-build /out/bionic /opt/bionic
-COPY --from=native-build /out/android-stubs /opt/android-stubs
-COPY --from=native-build /out/okam-hybris-probe /opt/okam/okam-hybris-probe
-COPY --from=native-build /out/okam-hybris-connect /opt/okam/okam-hybris-connect
 COPY --from=ffmpeg-build /out/ffmpeg/bin/ffmpeg /usr/bin/ffmpeg
 COPY tools/fetch_official_sdk.py /opt/okam/tools/fetch_official_sdk.py
 COPY docs/vendor-artifacts.json /opt/okam/docs/vendor-artifacts.json
 COPY src/okam_native /opt/okam/okam_native
+COPY native/amd64_connect/okam-amd64-connect /opt/okam/okam-amd64-connect
 COPY okam_native_app/app_entrypoint.py /opt/okam/app_entrypoint.py
+RUN chmod 0755 /opt/okam/okam-amd64-connect
 
 EXPOSE 8099
 ENTRYPOINT ["python3", "/opt/okam/app_entrypoint.py"]
+
+FROM runtime-base AS runtime-amd64
+ENV OKAM_RUNTIME_ARCH=amd64
+
+FROM runtime-base AS runtime-arm64
+ENV OKAM_RUNTIME_ARCH=arm64
+COPY --from=native-build-arm64 /out/hybris /opt/hybris
+COPY --from=native-build-arm64 /out/bionic /opt/bionic
+COPY --from=native-build-arm64 /out/android-stubs /opt/android-stubs
+COPY --from=native-build-arm64 /out/okam-hybris-probe /opt/okam/okam-hybris-probe
+COPY --from=native-build-arm64 /out/okam-hybris-connect /opt/okam/okam-hybris-connect
+
+FROM runtime-${TARGETARCH} AS final

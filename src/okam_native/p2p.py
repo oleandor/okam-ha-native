@@ -19,6 +19,7 @@ HTTP_TIMEOUT_SECONDS = 15.0
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_FIELD_BYTES = 4096
 VIRTUAL_ID_PATTERN = re.compile(r"^[A-Za-z]+\d{7,}.*[A-Za-z]$")
+DEFAULT_CAMERA_PASSWORD = "888888"
 
 
 class P2PError(RuntimeError):
@@ -108,6 +109,28 @@ def _field(value: str) -> bytes:
     if not encoded or len(encoded) > MAX_FIELD_BYTES or any(byte < 0x20 for byte in encoded):
         raise P2PError("native P2P input was invalid")
     return struct.pack(">I", len(encoded)) + encoded
+
+
+def select_camera_password(
+    api_password: str | None, configured_password: object = None
+) -> str:
+    """Choose a camera login credential without exposing it in diagnostics.
+
+    O-KAM normally returns this device-level credential during account
+    enumeration. Some account/camera combinations omit it, so an explicit app
+    option takes precedence and the camera's initial value is the final
+    compatibility fallback.
+    """
+
+    if configured_password not in (None, ""):
+        if not isinstance(configured_password, str):
+            raise P2PError("configured camera credential is invalid")
+        _field(configured_password)
+        return configured_password
+    if isinstance(api_password, str) and api_password:
+        _field(api_password)
+        return api_password
+    return DEFAULT_CAMERA_PASSWORD
 
 
 @dataclass(frozen=True)

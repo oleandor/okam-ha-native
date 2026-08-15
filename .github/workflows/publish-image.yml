@@ -9,6 +9,7 @@ on:
       - "native/android_compat/**"
       - "native/hybris_probe/**"
       - "native/hybris_connect/**"
+      - "native/amd64_connect/**"
       - "tools/fetch_official_sdk.py"
       - "docs/vendor-artifacts.json"
       - ".github/workflows/publish-image.yml"
@@ -23,8 +24,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.app.outputs.version }}
     steps:
       - uses: actions/checkout@v6
       - name: Read app version
@@ -32,6 +35,22 @@ jobs:
         shell: bash
         run: |
           echo "version=$(sed -n 's/^version: //p' okam_native_app/config.yaml)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ha_arch: aarch64
+            platform: linux/arm64
+            docker_arch: arm64
+          - ha_arch: amd64
+            platform: linux/amd64
+            docker_arch: amd64
+    steps:
+      - uses: actions/checkout@v6
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -39,18 +58,39 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish ARM64 app
+      - name: Build and publish ${{ matrix.ha_arch }} app
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./okam_native_app/Dockerfile
-          platforms: linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ghcr.io/oleandor/okam-ha-native:${{ steps.app.outputs.version }}
-            ghcr.io/oleandor/okam-ha-native:latest
+            ghcr.io/oleandor/okam-ha-native:${{ needs.prepare.outputs.version }}-${{ matrix.ha_arch }}
           build-args: |
-            BUILD_VERSION=${{ steps.app.outputs.version }}
-            BUILD_ARCH=aarch64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_VERSION=${{ needs.prepare.outputs.version }}
+            BUILD_ARCH=${{ matrix.ha_arch }}
+            TARGETARCH=${{ matrix.docker_arch }}
+          cache-from: type=gha,scope=${{ matrix.ha_arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.ha_arch }}
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-architecture manifests
+        shell: bash
+        run: |
+          version="${{ needs.prepare.outputs.version }}"
+          image="ghcr.io/oleandor/okam-ha-native"
+          docker buildx imagetools create \
+            --tag "$image:$version" \
+            --tag "$image:latest" \
+            "$image:$version-aarch64" \
+            "$image:$version-amd64"

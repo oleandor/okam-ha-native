@@ -2,6 +2,8 @@ from okam_native.acceptance import REQUIRED_GATES, evaluate
 
 
 def test_all_physical_and_architecture_gates_are_required() -> None:
+    assert "runs_on_aarch64" in REQUIRED_GATES
+    assert "runs_on_amd64" in REQUIRED_GATES
     passed, failures = evaluate({"gates": {name: True for name in REQUIRED_GATES}})
     assert passed
     assert failures == ()

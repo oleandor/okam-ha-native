@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.0
+
+- Adds native `amd64` support alongside the existing `aarch64` runtime.
+- Implements the camera's encrypted CS2/PPPP UDP transport and command framing
+  directly for x86-64 Home Assistant hosts.
+- Publishes one prebuilt multi-architecture image with architecture-correct
+  Home Assistant labels.
+- Keeps the account, wake, bridge API, streaming, snapshot, and lifecycle logic
+  shared across both architectures.
+- Handles accounts that omit the camera-level credential, with an optional
+  local camera-password override for changed device passwords.
+- Uses the configured camera alias as the exact suggested entity ID on a fresh
+  Home Assistant installation, for example `camera.cabin`.
+- Adds protocol-vector, wire-format, reliable-channel, H.264, helper-contract,
+  metadata, and architecture-selection tests.
+
 ## 1.1.1
 
 - Refreshes the Home Assistant camera image as soon as native H.264 media

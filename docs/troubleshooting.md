@@ -11,9 +11,8 @@
 2. Open **Settings → Apps → App store**, open **Repositories**, remove any
    incorrect entry, and add the URL again.
 3. Refresh the app store page.
-4. Confirm that Home Assistant reports an `aarch64` architecture. Raspberry Pi
-   1 and 2 use unsupported 32-bit configurations. Raspberry Pi 3 requires a
-   64-bit Home Assistant OS image.
+4. Confirm that Home Assistant reports an `aarch64` or `amd64` architecture.
+   A Raspberry Pi requires a 64-bit Home Assistant installation.
 
 ## The app says configuration is required
 
@@ -36,6 +35,21 @@ camera-owner account or an account to which the camera was shared.
 3. Remove any additional cameras from that account or use an account containing
    only the intended camera.
 4. Save the Home Assistant app configuration and restart the app.
+
+## Camera authentication fails
+
+Leave `camera_password` blank for normal setup. The bridge first uses the
+camera-level credential returned by O-KAM and automatically handles accounts
+that omit it by trying the camera's common initial value.
+
+If enumeration succeeds but a diagnostic or live stream reports camera
+authentication failure, the camera may use a changed local password that O-KAM
+did not return. Enter that known local camera password in `camera_password`,
+save, and restart the app. This value is not the O-KAM account password or the
+bridge API token. Do not post it in an issue.
+
+The older startup message `camera_device_credential_was_unavailable` is handled
+by version 1.2.0 and later; update the app before further troubleshooting.
 
 ## The integration cannot connect
 

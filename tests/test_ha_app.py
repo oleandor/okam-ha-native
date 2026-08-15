@@ -4,17 +4,19 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_native_bridge_is_a_prebuilt_arm64_ha_app() -> None:
+def test_native_bridge_is_a_prebuilt_64_bit_ha_app() -> None:
     config = (ROOT / "okam_native_app" / "config.yaml").read_text(encoding="utf-8")
     assert "image: ghcr.io/oleandor/okam-ha-native" in config
     assert "- aarch64" in config
+    assert "- amd64" in config
     assert "boot: auto" in config
     assert "stage: experimental" not in config
     assert "machine:" not in config
-    assert "version: 1.1.1" in config
+    assert "version: 1.2.0" in config
     assert "idle_timeout_seconds: 120" in config
     assert "account_username: email" in config
     assert "account_password: password" in config
+    assert "camera_password: password" in config
     assert "api_token: password" in config
     assert 'idle_timeout_seconds: "int(10,600)"' in config
     assert "run_connect_test: bool" in config
@@ -30,6 +32,9 @@ def test_native_image_excludes_windows_gui_runtime() -> None:
     assert "ffmpeg" in dockerfile.lower()
     assert "LIBHYBRIS_COMMIT=7079712a42ea2754adf747e70c6cc75764c8596e" in dockerfile
     assert "AOSP_SHA1=e209114dd0dfc2f4e0d328f5fd7367fec39ee1bd" in dockerfile
+    assert "runtime-amd64" in dockerfile
+    assert "runtime-arm64" in dockerfile
+    assert "FROM runtime-${TARGETARCH} AS final" in dockerfile
 
 
 def test_status_distinguishes_loader_from_camera_acceptance() -> None:
@@ -44,6 +49,25 @@ def test_status_distinguishes_loader_from_camera_acceptance() -> None:
     assert "camera_authenticated=true clean_disconnect=true" in entrypoint
     assert "h264_received=true" in entrypoint
     assert "snapshot_created=true" in entrypoint
+    assert 'RUNTIME_ARCH == "amd64"' in entrypoint
+    assert 'RUNTIME_ARCH == "aarch64"' in entrypoint
+    assert "/opt/okam/okam-amd64-connect" in entrypoint
+    assert 'command.append("--wake-only")' in entrypoint
+    assert "select_camera_password" in entrypoint
+    assert "camera device credential was unavailable" not in entrypoint
+
+
+def test_publish_workflow_builds_one_multi_architecture_image() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish-image.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "platform: linux/arm64" in workflow
+    assert "platform: linux/amd64" in workflow
+    assert "BUILD_ARCH=${{ matrix.ha_arch }}" in workflow
+    assert "TARGETARCH=${{ matrix.docker_arch }}" in workflow
+    assert "docker buildx imagetools create" in workflow
+    assert 'version-aarch64"' in workflow
+    assert 'version-amd64"' in workflow
 
 
 def test_repository_contains_camera_integration_for_native_api() -> None:
@@ -51,7 +75,7 @@ def test_repository_contains_camera_integration_for_native_api() -> None:
     manifest = (component / "manifest.json").read_text(encoding="utf-8")
     config_flow = (component / "config_flow.py").read_text(encoding="utf-8")
     camera = (component / "camera.py").read_text(encoding="utf-8")
-    assert '"version": "1.1.1"' in manifest
+    assert '"version": "1.2.0"' in manifest
     assert "http://homeassistant.local:8099" in config_flow
     assert "CameraEntityFeature.STREAM" in camera
     assert "_attr_has_entity_name = False" in camera
@@ -60,6 +84,10 @@ def test_repository_contains_camera_integration_for_native_api() -> None:
     assert "WAKE_WATCH_SECONDS = 90" in camera
     assert "self.async_update_token()" in camera
     assert "self._last_snapshot" in camera
+    assert (
+        "self.internal_integration_suggested_object_id = runtime.coordinator.camera_id"
+        in camera
+    )
 
 
 def test_integration_uses_two_minute_warm_connection_default() -> None:
@@ -92,3 +120,4 @@ def test_user_documentation_is_current_and_complete() -> None:
     assert "camera.cabin" in combined
     assert "secondary" not in lowered
     assert "aarch64" in lowered
+    assert "amd64" in lowered
