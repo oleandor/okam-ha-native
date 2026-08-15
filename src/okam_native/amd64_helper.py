@@ -8,14 +8,24 @@ import struct
 import sys
 
 from .cs2 import (
+    LIVE_STREAM_RESPONSE_COMMANDS,
+    LOGIN_RESPONSE_COMMAND,
+    CameraLoginRejected,
     CS2Error,
     CS2Session,
     authenticate_camera,
     inspect_h264,
+    login_candidates,
     make_cgi_request,
+    read_command_result,
     read_video_frame,
     write_command,
 )
+
+
+# The live-start acknowledgement is read before the first media read so it is
+# recorded as evidence instead of sitting unclaimed in the channel-0 buffer.
+LIVE_START_RESPONSE_SECONDS = 10.0
 
 
 _running = True
@@ -51,6 +61,12 @@ def _summary(**values: object) -> dict[str, object]:
         "authenticated": False,
         "login_command": 0,
         "login_result": -1,
+        "login_candidate": -1,
+        "login_attempts": [],
+        "connect_path": "",
+        "counters": {},
+        "stream_start_command": 0,
+        "stream_start_result": -1,
         "stream_start_sent": False,
         "stream_stop_sent": False,
         "h264_received": False,
@@ -64,45 +80,85 @@ def _summary(**values: object) -> dict[str, object]:
     return defaults
 
 
-def run(
-    mode: str, uid: str, service: str, device_password: str | None
+def _finish(
+    session: CS2Session, result: dict[str, object], code: int
 ) -> tuple[int, dict[str, object]]:
+    """Attach the sanitized transport counters to every exit path."""
+
+    result["counters"] = dict(sorted(session.counters.items()))
+    return code, result
+
+
+def run(
+    mode: str,
+    uid: str,
+    service: str,
+    device_password: str | None,
+    *,
+    credential_index: int | None = None,
+    substream: int = 2,
+    prefer_relay: bool = True,
+) -> tuple[int, dict[str, object]]:
+    """Run one probe stage.
+
+    `credential_index` forces a specific login candidate and skips the login
+    probe. It exists to test whether a command that the login probe accepts is
+    the same one the camera will honour for media.
+    """
+
     global _running
     _running = True
-    session = CS2Session(uid, service)
+    session = CS2Session(uid, service, prefer_relay=prefer_relay)
     result = _summary()
     accepted_user = "admin"
     accepted_password = device_password or ""
     try:
         session.connect(timeout=55.0)
-        result.update(connected=True, connect_state=3)
+        result.update(connected=True, connect_state=3, connect_path=session.connect_path)
         if mode == "connect":
             result["disconnected"] = session.close()
-            return 0, result
+            return _finish(session, result, 0)
         assert device_password is not None
-        result["login_sent"] = True
-        accepted_user, accepted_password, login_result = authenticate_camera(
-            session, device_password
-        )
-        result.update(
-            login_response_received=True,
-            authenticated=True,
-            login_command=0x6001,
-            login_result=login_result,
-        )
+        if credential_index is not None:
+            candidates = login_candidates(device_password)
+            if not 0 <= credential_index < len(candidates):
+                raise CS2Error("credential candidate is out of range")
+            accepted_user, accepted_password = candidates[credential_index]
+            result["login_candidate"] = credential_index
+        else:
+            result["login_sent"] = True
+            login = authenticate_camera(session, device_password)
+            accepted_user, accepted_password = login.user, login.password
+            result.update(
+                login_response_received=True,
+                authenticated=True,
+                login_command=LOGIN_RESPONSE_COMMAND,
+                login_result=login.result,
+                login_candidate=login.candidate,
+                login_attempts=list(login.attempts),
+            )
         if mode == "authenticate":
             result["disconnected"] = session.close()
-            return 0, result
+            return _finish(session, result, 0)
 
         write_command(
             session,
             make_cgi_request(
-                "livestream.cgi?streamid=10&substream=2&",
+                f"livestream.cgi?streamid=10&substream={substream}&",
                 accepted_user,
                 accepted_password,
             ),
         )
         result["stream_start_sent"] = True
+        # Media buffers normally while this bounded read waits, so claiming the
+        # acknowledgement here costs no frames.
+        answer = read_command_result(
+            session,
+            LIVE_STREAM_RESPONSE_COMMANDS,
+            timeout=LIVE_START_RESPONSE_SECONDS,
+        )
+        if answer is not None:
+            result.update(stream_start_command=answer[0], stream_start_result=answer[1])
         signal.signal(signal.SIGINT, _stop)
         signal.signal(signal.SIGTERM, _stop)
         while _running:
@@ -140,8 +196,14 @@ def run(
         result["stream_stop_sent"] = True
         result["disconnected"] = session.close()
         ok = bool(result["h264_received"]) and bool(result["stream_stop_sent"])
-        return (0 if ok else 6), result
-    except CS2Error:
+        return _finish(session, result, 0 if ok else 6)
+    except CS2Error as error:
+        if isinstance(error, CameraLoginRejected):
+            # A rejection is evidence too: record which candidates answered.
+            result["login_attempts"] = list(error.attempts)
+            result["login_response_received"] = any(
+                item is not None for item in error.attempts
+            )
         if result["stream_start_sent"] and not result["stream_stop_sent"]:
             try:
                 write_command(
@@ -157,10 +219,10 @@ def run(
                 pass
         result["disconnected"] = session.close()
         if not result["connected"]:
-            return 4, result
+            return _finish(session, result, 4)
         if not result["authenticated"]:
-            return 5, result
-        return 6, result
+            return _finish(session, result, 5)
+        return _finish(session, result, 6)
 
 
 def main() -> int:

@@ -6,6 +6,7 @@ import socket
 import struct
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 
 DIRECTORY_PORT = 32100
@@ -23,6 +24,15 @@ PUNCH_RETRY_SECONDS = 1.0
 # This covers common symmetric-NAT remapping without turning discovery into
 # an unbounded scan.
 PUNCH_PORT_RANGE = 3
+LOGIN_RESPONSE_COMMAND = 0x6001
+# The relay path answers live-start with 0x6037; the direct path used 0x60D1.
+LIVE_STREAM_RESPONSE_COMMANDS = (0x6037, 0x60D1)
+# Each login candidate gets its own bounded read window. A single shared
+# window let a late candidate's silence look identical to a rejection.
+AUTH_CANDIDATE_SECONDS = 15.0
+# Kept below the app-side counter limit so a histogram can never cause the
+# whole diagnostic block to be rejected.
+MAX_COUNTER_KEYS = 48
 _ENCRYPTED_PACKET_TYPES = {
     b"\xf1\x00",
     b"\xf1\x20",
@@ -37,6 +47,12 @@ _ENCRYPTED_PACKET_TYPES = {
 }
 _DUAL_WIRE_PACKET_TYPES = {
     b"\xf1\x41",
+    # The readiness reply and its acknowledgement were the only session
+    # packets sent in clear while data, acks, alive, and close were all
+    # encrypted. A camera that ignores the clear form keeps re-sending F1 41,
+    # which is what the counters showed, so send both forms like F1 41.
+    b"\xf1\x42",
+    b"\xf1\x43",
     b"\xf1\x80",
     b"\xf1\x83",
     b"\xf1\xd1",
@@ -61,6 +77,10 @@ _SHUFFLE = bytes.fromhex(
 
 class CS2Error(RuntimeError):
     """A credential-safe native transport failure."""
+
+
+class CS2Timeout(CS2Error):
+    """A bounded read expired. Separated so callers can retry deliberately."""
 
 
 def decode_service_parameter(value: str) -> tuple[tuple[str, ...], str]:
@@ -244,7 +264,12 @@ class CS2Session:
         service_parameter: str,
         *,
         socket_factory: SocketFactory | None = None,
+        prefer_relay: bool = True,
     ) -> None:
+        # The official client reaches media over a relay session even when a
+        # direct punch is available. Latching onto the direct peer yields a
+        # session that accepts commands but never streams.
+        self.prefer_relay = prefer_relay
         self.uid = encode_uid(uid)
         self.servers, self.key = decode_service_parameter(service_parameter)
         self._socket_factory = socket_factory or self._new_socket
@@ -256,6 +281,37 @@ class CS2Session:
         self._out_of_order: list[dict[int, bytes]] = [dict() for _ in range(8)]
         self._pending: dict[tuple[int, int], list[object]] = {}
         self._closed = False
+        self._counters: dict[str, int] = {}
+        self._close_targets: set[tuple[str, int]] = set()
+        self.connect_path = ""
+
+    @property
+    def counters(self) -> dict[str, int]:
+        """Sanitized packet counts: never addresses, payloads, or credentials.
+
+        Created on demand so a partially constructed session still counts.
+        """
+
+        existing = getattr(self, "_counters", None)
+        if existing is None:
+            existing = {}
+            self._counters = existing
+        return existing
+
+    def _count(self, name: str, amount: int = 1) -> None:
+        counters = self.counters
+        counters[name] = counters.get(name, 0) + amount
+
+    def _count_kind(self, prefix: str, kind: str) -> None:
+        """Record a bounded per-type histogram beside its total.
+
+        Bounded so an unexpected stream of packet types cannot grow the
+        counter set past what the app-side validator will accept.
+        """
+
+        name = prefix + kind
+        if name in self.counters or len(self.counters) < MAX_COUNTER_KEYS:
+            self._count(name)
 
     @staticmethod
     def _new_socket() -> socket.socket:
@@ -327,7 +383,10 @@ class CS2Session:
                 elif relay_request is None:
                     self._send_clear(relay_port_request, relay_port_endpoint)
                 else:
-                    for endpoint in relay_endpoints:
+                    # The relay request is a rendezvous instruction, so it goes
+                    # to the directory servers, not to the relay itself. They
+                    # answer F1 81 and then F1 82 with the address to punch.
+                    for endpoint in directory_endpoints:
                         self._send_clear(relay_request, endpoint)
                 last_relay_send = now
             if endpoints and now - last_punch_send >= PUNCH_RETRY_SECONDS:
@@ -344,12 +403,20 @@ class CS2Session:
             if received is None:
                 continue
             packet, address = received
+            if packet[:2] in (b"\xf1\x41", b"\xf1\x42", b"\xf1\x84"):
+                self._close_targets.add(address)
+            # Negotiation histogram, so a failed connect says where it stalled.
+            self._count_kind("connect_", packet[:2].hex())
+            if packet[:2] in (b"\xf1\x73", b"\xf1\x82", b"\xf1\x84"):
+                # Lengths decide whether these are parsed or silently skipped.
+                self._count_kind(packet[:2].hex() + "_len", str(len(packet)))
             if packet[:2] == b"\xf1\x40" and address in directory_endpoints and len(packet) >= 20:
                 try:
                     endpoint = decode_network_address(packet[4:20])
                 except CS2Error:
                     continue
                 endpoints.add(endpoint)
+                self._close_targets.add(endpoint)
                 self._send_clear(punch, endpoint)
                 self._send_clear(punch, endpoint)
             elif packet[:2] == b"\xf1\x69" and address in directory_endpoints:
@@ -365,7 +432,7 @@ class CS2Session:
                 if request is None:
                     continue
                 relay_request = request
-                for endpoint in relay_endpoints:
+                for endpoint in directory_endpoints:
                     self._send_clear(request, endpoint)
             elif packet[:2] == b"\xf1\x82" and address in directory_endpoints:
                 if len(packet) != 24:
@@ -397,6 +464,7 @@ class CS2Session:
                     self._send_clear(b"\xf1\x03\x00\x00", destination)
             elif (
                 packet[:2] == b"\xf1\x41"
+                and not self.prefer_relay
                 and address not in directory_endpoints
                 and len(packet) == 24
                 and packet[4:24] == self.uid
@@ -406,18 +474,33 @@ class CS2Session:
                 # appear to work without P2pRdy, but cameras may withhold the
                 # media channel until readiness is mutual.
                 self._peer = address
+                self.connect_path = "direct-punch"
                 self._send_clear(b"\xf1\x42\x00\x14" + self.uid, address)
                 self._send_clear(b"\xf1\xe0\x00\x00", address)
                 return
             elif (
                 packet[:2] == b"\xf1\x42"
+                and not self.prefer_relay
                 and address not in directory_endpoints
                 and len(packet) == 24
                 and packet[4:24] == self.uid
             ):
                 self._peer = address
+                self.connect_path = "direct-accept"
                 self._send_clear(b"\xf1\x43\x00\x00", address)
                 return
+            elif (
+                packet[:2] == b"\xf1\x42"
+                and self.prefer_relay
+                and address not in directory_endpoints
+                and len(packet) == 24
+                and packet[4:24] == self.uid
+            ):
+                # Acknowledge the camera's readiness request without adopting it
+                # as the session peer. Leaving it unanswered makes the camera
+                # retry indefinitely instead of releasing its previous binding.
+                self._count("declined_readiness")
+                self._send_clear(b"\xf1\x43\x00\x00", address)
             elif (
                 packet[:2] == b"\xf1\x84"
                 and address not in directory_endpoints
@@ -428,6 +511,7 @@ class CS2Session:
                 # session peer. Mirror the official client by acknowledging
                 # liveness before exposing the connected session.
                 self._peer = address
+                self.connect_path = "relay"
                 self._send_clear(b"\xf1\xe0\x00\x00", address)
                 return
         self.close()
@@ -462,7 +546,7 @@ class CS2Session:
         buffer = self._channel_buffers[channel]
         while len(buffer) < size:
             if time.monotonic() >= deadline:
-                raise CS2Error("camera channel read timed out")
+                raise CS2Timeout("camera channel read timed out")
             self._pump()
         result = bytes(buffer[:size])
         del buffer[:size]
@@ -472,12 +556,19 @@ class CS2Session:
         if self._closed:
             return True
         sent = False
-        if self._socket is not None and self._peer is not None:
-            try:
-                self._send_clear(b"\xf1\xf0\x00\x00", self._peer)
-                sent = True
-            except CS2Error:
-                pass
+        # Close every endpoint this session touched, not just the peer. A
+        # camera left holding a stale binding refuses the next rendezvous, and
+        # a connect that never latched a peer used to send no close at all.
+        targets = set(self._close_targets)
+        if self._peer is not None:
+            targets.add(self._peer)
+        if self._socket is not None:
+            for target in targets:
+                try:
+                    self._send_clear(b"\xf1\xf0\x00\x00", target)
+                    sent = True
+                except CS2Error:
+                    continue
         if self._socket is not None:
             try:
                 self._socket.close()
@@ -493,20 +584,38 @@ class CS2Session:
         if received is None:
             return
         packet, address = received
+        # Total handled here, so anything unaccounted for belongs to connect().
+        self._count("pump_packets")
         if address != self._peer:
+            # A camera that streams media from a neighbouring source port
+            # would be silently invisible here, so make the drop measurable.
+            self._count("packets_from_other_source")
             return
         kind = packet[:2]
         if kind == b"\xf1\xe0":
+            self._count("alive_requests")
             self._send_clear(b"\xf1\xe1\x00\x00", address)
+        elif kind == b"\xf1\x41":
+            # The camera repeats its punch until readiness is mutual. Answering
+            # only inside connect() left every later repeat unanswered.
+            self._count("punch_repeats")
+            self._send_clear(b"\xf1\x42\x00\x14" + self.uid, address)
         elif kind == b"\xf1\x42":
+            self._count("readiness_requests")
             self._send_clear(b"\xf1\x43\x00\x00", address)
         elif kind == b"\xf1\xd1":
+            self._count("ack_packets")
             self._handle_ack(packet)
         elif kind == b"\xf1\xd0":
+            self._count("data_packets")
             self._handle_data(packet)
         elif kind == b"\xf1\xf0":
+            self._count("close_packets")
             self.close()
             raise CS2Error("camera closed the native P2P session")
+        else:
+            self._count("other_packets")
+            self._count_kind("other_", kind.hex())
 
     def _handle_ack(self, packet: bytes) -> None:
         body = packet[4:]
@@ -524,8 +633,11 @@ class CS2Session:
         declared = int.from_bytes(packet[2:4], "big") if len(packet) >= 4 else -1
         body = packet[4:]
         if declared != len(body) or len(body) < 4 or body[0] != 0xD1 or body[1] >= 8:
+            self._count("data_packets_invalid")
             return
         channel = body[1]
+        self._count(f"channel{channel}_packets")
+        self._count(f"channel{channel}_bytes", len(body) - 4)
         sequence = int.from_bytes(body[2:4], "big")
         ack_body = b"\xd1" + bytes([channel]) + b"\x00\x01" + body[2:4]
         assert self._peer is not None
@@ -556,6 +668,7 @@ class CS2Session:
                 self._pending.pop(key, None)
                 raise CS2Error("camera did not acknowledge native P2P data")
             self._send_clear(packet, self._peer)
+            self._count("retransmits")
             value[1] = now
             value[2] = attempts + 1
 
@@ -568,11 +681,14 @@ class CS2Session:
             return None
         except OSError:
             raise CS2Error("native P2P receive failed") from None
+        self._count("packets_received")
         clear = encrypted if encrypted.startswith(b"\xf1") else decrypt_packet(self.key, encrypted)
         if len(clear) < 4 or clear[0] != 0xF1:
+            self._count("packets_undecodable")
             return None
         declared = int.from_bytes(clear[2:4], "big")
         if declared != len(clear) - 4:
+            self._count("packets_length_mismatch")
             return None
         return clear, address
 
@@ -621,11 +737,23 @@ def write_command(session: CS2Session, request: bytes) -> None:
 
 
 def read_command(session: CS2Session, *, timeout: float) -> tuple[int, bytes]:
+    deadline = time.monotonic() + timeout
     header = session.read_exact(0, 8, timeout=timeout)
     magic, command, length, _reserved = struct.unpack("<HHHH", header)
     if magic != 0x0A01 or length > MAX_COMMAND_BYTES:
         raise CS2Error("camera command framing is invalid")
-    return command, session.read_exact(0, length, timeout=timeout)
+    # Command identifiers only. A response the reader skips is invisible
+    # otherwise, which is exactly the case that needs explaining.
+    session._count_kind("command_", f"{command:04x}")
+    try:
+        payload = session.read_exact(
+            0, length, timeout=max(0.0, deadline - time.monotonic())
+        )
+    except CS2Timeout:
+        # The header is already consumed, so channel 0 cannot be resynchronized.
+        # Fail hard rather than let a retry read into the next command.
+        raise CS2Error("camera command body did not arrive") from None
+    return command, payload
 
 
 def parse_result(payload: bytes) -> int | None:
@@ -651,33 +779,91 @@ def parse_result(payload: bytes) -> int | None:
     return None
 
 
-def authenticate_camera(
-    session: CS2Session, device_password: str, *, timeout: float = 45.0
-) -> tuple[str, str, int]:
-    candidates = list(
+def login_candidates(device_password: str) -> list[tuple[str, str]]:
+    """Ordered credential candidates.
+
+    Candidate 0 is the enumerated camera credential, 1 the common initial
+    value, 2 the empty value. Only the index is ever reported, so a login
+    summary cannot disclose which secret the camera accepted.
+    """
+
+    return list(
         dict.fromkeys((("admin", device_password), ("admin", "888888"), ("admin", "")))
     )
+
+
+@dataclass(frozen=True)
+class CameraLogin:
+    """The accepted credential plus the sanitized per-candidate outcomes."""
+
+    user: str
+    password: str
+    result: int
+    candidate: int
+    attempts: tuple[int | None, ...]
+
+
+class CameraLoginRejected(CS2Error):
+    """No candidate authenticated. Carries results only, never credentials."""
+
+    def __init__(self, attempts: tuple[int | None, ...]) -> None:
+        super().__init__("camera rejected native authentication")
+        self.attempts = attempts
+
+
+def _read_response(
+    session: CS2Session, command_ids: tuple[int, ...], deadline: float
+) -> tuple[int, int] | None:
+    """Return the answering command and result, or None if none answered."""
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            command, payload = read_command(session, timeout=remaining)
+        except CS2Timeout:
+            return None
+        if command not in command_ids:
+            continue
+        result = parse_result(payload)
+        if result is not None:
+            return command, result
+
+
+def read_command_result(
+    session: CS2Session, command_ids: tuple[int, ...], *, timeout: float
+) -> tuple[int, int] | None:
+    """Consume channel-0 responses until `command_id` answers, or give up.
+
+    Leaving a response unread hides it in the channel buffer, where it can be
+    misattributed to the next command that reads from channel 0.
+    """
+
+    return _read_response(session, command_ids, time.monotonic() + timeout)
+
+
+def authenticate_camera(
+    session: CS2Session, device_password: str, *, timeout: float = 45.0
+) -> CameraLogin:
+    candidates = login_candidates(device_password)
     deadline = time.monotonic() + timeout
-    last_result = -1
-    for user, password in candidates:
+    attempts: list[int | None] = []
+    for candidate, (user, password) in enumerate(candidates):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        window = time.monotonic() + min(remaining, AUTH_CANDIDATE_SECONDS)
         write_command(
             session,
             make_cgi_request("get_status.cgi?name=admin&", user, password),
         )
-        while time.monotonic() < deadline:
-            command, payload = read_command(
-                session, timeout=max(0.1, deadline - time.monotonic())
-            )
-            if command != 0x6001:
-                continue
-            result = parse_result(payload)
-            if result is None:
-                continue
-            last_result = result
-            if result == 0:
-                return user, password, result
-            break
-    raise CS2Error("camera rejected native authentication")
+        answer = _read_response(session, (LOGIN_RESPONSE_COMMAND,), window)
+        result = None if answer is None else answer[1]
+        attempts.append(result)
+        if result == 0:
+            return CameraLogin(user, password, result, candidate, tuple(attempts))
+    raise CameraLoginRejected(tuple(attempts))
 
 
 def read_video_frame(session: CS2Session, *, timeout: float) -> tuple[bytes, int]:
