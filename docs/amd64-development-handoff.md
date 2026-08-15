@@ -314,6 +314,36 @@ does not currently point to a missing TCP relay implementation.
 6. Change one behavior at a time and add a deterministic unit test for every
    protocol correction.
 
+## Known follow-ups
+
+Not defects that block the gates, but real rough edges observed while testing.
+
+### A bridge restart invalidates a live view already open
+
+`CameraBridge` generates a fresh `_stream_token` on every process start, and
+Home Assistant caches the stream URL inside the `Stream` object it built for the
+entity. After the bridge restarts, that cached URL keeps the old token and the
+stream worker fails with `401 Unauthorized` until the config entry is reloaded
+or a new stream is created. Reproduced directly: restarting the bridge container
+produced repeated `Unauthorized error opening stream` in the worker log, and
+reloading the config entry cleared it.
+
+Two ways to fix, neither attempted yet:
+
+- Derive the stream token from a value that survives a restart, so a cached URL
+  stays valid. Simplest, but it makes the token only as fresh as the process
+  configuration.
+- Have the integration notice the failure and call the stream's
+  `update_source()` with a freshly fetched URL. More correct, and it also covers
+  the token changing for any other reason.
+
+### The camera entity state lags the bridge
+
+The coordinator polls bridge status on its own interval, so `camera.*` can still
+read `idle` while media is actively flowing. Snapshots and live view both work in
+that window, so this is cosmetic, but it makes the entity state a poor signal for
+automations that want to know whether the camera is streaming.
+
 ## Required release gates
 
 Current status: gates 1 to 7 are met. Gates 1 to 6 were verified repeatedly on
