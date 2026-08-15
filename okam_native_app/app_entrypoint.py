@@ -12,11 +12,10 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from okam_native.account import AccountDevice, AccountError, Eye4AccountClient
-from okam_native.bridge import CameraBridge, make_handler
+from okam_native.bridge import CameraBridge, QuietThreadingHTTPServer, make_handler
 from okam_native.p2p import (
     P2PError,
     diagnostic_line,
@@ -448,7 +447,7 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
 
 
 def main() -> int:
-    server = ThreadingHTTPServer(
+    server = QuietThreadingHTTPServer(
         ("0.0.0.0", 8099), make_handler(get_status, get_bridge)
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()

@@ -7,9 +7,10 @@ import json
 import re
 import secrets
 import subprocess
+import sys
 import threading
 from collections.abc import Callable
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlsplit
 
 from .p2p import P2PError
@@ -18,7 +19,38 @@ from .session import NativeStreamSession
 
 MAX_REQUEST_BYTES = 4096
 STREAM_CHUNK_BYTES = 32 * 1024
+# A client going away mid-request is normal here: the supervisor polls the
+# bridge, and media consumers disconnect whenever a view closes.
+_EXPECTED_DISCONNECTS = (
+    BrokenPipeError,
+    ConnectionAbortedError,
+    ConnectionResetError,
+    TimeoutError,
+)
 HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[0-9]{1,5})?$")
+
+
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """An HTTP server that does not report a dropped client as a crash.
+
+    The default handler prints a full traceback and the peer address whenever a
+    client disconnects mid-request. The supervisor polls this bridge and closes
+    connections abruptly, which filled the app log with alarming
+    ConnectionResetError tracebacks for entirely normal behaviour.
+    """
+
+    daemon_threads = True
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        error = sys.exc_info()[1]
+        if isinstance(error, _EXPECTED_DISCONNECTS):
+            return
+        # Type only: the peer address is never logged.
+        print(
+            f"bridge_request_failed error={type(error).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 class CameraBridge:

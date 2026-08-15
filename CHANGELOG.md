@@ -9,6 +9,9 @@
   Home Assistant labels.
 - Keeps the account, wake, bridge API, streaming, snapshot, and lifecycle logic
   shared across both architectures.
+- Stops reporting a disconnected client as a crash. The supervisor polls the
+  bridge and closes connections abruptly, which filled the app log with
+  ConnectionResetError tracebacks for normal behaviour (issue #5).
 - Handles accounts that omit the camera-level credential, with an optional
   local camera-password override for changed device passwords.
 - Uses the configured camera alias as the exact suggested entity ID on a fresh

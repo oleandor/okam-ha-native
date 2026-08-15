@@ -4,7 +4,7 @@ import threading
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from okam_native.bridge import CameraBridge, make_handler
+from okam_native.bridge import CameraBridge, QuietThreadingHTTPServer, make_handler
 from okam_native.session import SessionStatus
 
 
@@ -181,3 +181,26 @@ def test_bridge_reports_idle_waking_and_streaming_states() -> None:
     assert bridge.status()["state"] == "waking"
     session.media_ready = True
     assert bridge.status()["state"] == "streaming"
+
+
+def test_dropped_clients_do_not_report_a_crash(capsys) -> None:
+    # The supervisor polls the bridge and closes connections abruptly. The
+    # default handler prints a traceback and the peer address for each one.
+    server = object.__new__(QuietThreadingHTTPServer)
+    peer = ("172.30.32.2", 47536)
+
+    for benign in (ConnectionResetError, BrokenPipeError, TimeoutError):
+        try:
+            raise benign("client went away")
+        except benign:
+            server.handle_error(object(), peer)
+    assert capsys.readouterr().err == ""
+
+    try:
+        raise ValueError("a real fault")
+    except ValueError:
+        server.handle_error(object(), peer)
+    captured = capsys.readouterr().err
+    assert "bridge_request_failed error=ValueError" in captured
+    assert "172.30.32.2" not in captured
+    assert "Traceback" not in captured
