@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+- Shows the release notes in the app update dialog. The supervisor reads a
+  changelog from the app directory, so updating previously reported that none
+  was found.
+
 ## 1.2.0
 
 - Adds native `amd64` support alongside the existing `aarch64` runtime.
