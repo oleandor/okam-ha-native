@@ -25,3 +25,5 @@ probe-*.log
 *.aar
 *.zip
 *.exe
+uv.lock
+*.egg-info/
