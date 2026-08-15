@@ -19,6 +19,7 @@ from okam_native.account import AccountDevice, AccountError, Eye4AccountClient
 from okam_native.bridge import CameraBridge, make_handler
 from okam_native.p2p import (
     P2PError,
+    diagnostic_line,
     get_service_parameter,
     open_stream_process,
     resolve_client_id,
@@ -310,6 +311,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                     f"clean_disconnect={str(result.disconnected).lower()}",
                     flush=True,
                 )
+                print(diagnostic_line(result), flush=True)
         if stream_enabled:
             set_status(
                 stream_start_sent=result.stream_start_sent,
@@ -358,6 +360,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 f"clean_disconnect={str(result.disconnected).lower()}",
                 flush=True,
             )
+            print(diagnostic_line(result), flush=True)
         if not stream_enabled and auth_enabled and result.connected and result.authenticated and result.disconnected:
             set_status(
                 p2p_ready=True,
