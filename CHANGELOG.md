@@ -13,8 +13,20 @@
   local camera-password override for changed device passwords.
 - Uses the configured camera alias as the exact suggested entity ID on a fresh
   Home Assistant installation, for example `camera.cabin`.
+- Reaches the camera's media over its relay session. A direct UDP punch yields
+  a session that authenticates and acknowledges live-start but never delivers
+  video, and it previously hid the relay path by winning the race.
+- Addresses the relay request to the directory servers rather than to the relay
+  itself, which is what makes the relay rendezvous complete.
+- Notifies every endpoint a session touched when closing, and acknowledges a
+  declined direct readiness request, so a camera does not hold a stale binding
+  that blocks the next connection.
+- Starts a newly opened live view on a decodable boundary by caching the
+  stream's parameter sets and newest keyframe. Opening a second view of an
+  already-streaming camera no longer waits for the camera's next keyframe.
 - Adds protocol-vector, wire-format, reliable-channel, H.264, helper-contract,
-  metadata, and architecture-selection tests.
+  metadata, architecture-selection, relay-negotiation, session-teardown, and
+  live-view priming tests.
 
 ## 1.1.1
 

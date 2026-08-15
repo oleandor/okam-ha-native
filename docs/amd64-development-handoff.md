@@ -39,6 +39,214 @@ idle lifecycle, and Home Assistant custom integration remain shared.
   `camera_password` override, the enumerated camera credential, or the camera's
   common initial value, in that order. This also addresses GitHub issue #5.
 
+## Post-handoff corrections
+
+These are transport-layer fixes and instrumentation. No packet bytes on the
+wire changed, so they do not invalidate the byte-for-byte comparisons above.
+
+1. Login candidates each get their own bounded read window
+   (`AUTH_CANDIDATE_SECONDS`). They previously shared one deadline, so a later
+   candidate could be starved of time and report a rejection that was really a
+   timeout. This alone can explain part of the "authentication results have
+   varied" observation.
+2. A login outcome now distinguishes *rejected* (a result was returned) from
+   *silent* (no response arrived). `CameraLogin.attempts` records one entry per
+   candidate and `CameraLoginRejected` carries the same tuple on failure.
+3. `read_command` bounds the header and body reads against one shared deadline.
+   A consumed header with a missing body now fails hard instead of raising a
+   soft timeout, because channel 0 cannot be resynchronized once a partial
+   command has been read. Retrying after that would have read into the
+   following command.
+4. The live-start acknowledgement is read and recorded before the first media
+   read, instead of being left unclaimed in the channel-0 buffer where a later
+   read could misattribute it. Media buffers during that bounded wait, so no
+   frames are lost.
+5. `CS2Session.counters` records sanitized packet counts only — no addresses,
+   payloads, or credentials. `CS2Session.connect_path` records which branch
+   established the peer (`direct-punch`, `direct-accept`, or `relay`).
+
+### Reading the new helper summary
+
+The helper JSON now also carries `login_candidate`, `login_attempts`,
+`connect_path`, `stream_start_command`, `stream_start_result`, and `counters`.
+On the next physical run these separate the remaining hypotheses directly:
+
+- `channel1_packets` / `channel1_bytes` at zero means the camera sent no media
+  at all, so the problem is upstream of framing.
+- `channel1_bytes` above zero while no frame is parsed means media is arriving
+  and `read_video_frame`'s 32-byte header or magic is wrong.
+- `packets_from_other_source` above zero means the camera is sending from a
+  port that is not the latched peer, and those packets are being discarded.
+- `packets_undecodable` or `packets_length_mismatch` rising during the stream
+  window points at the encryption or envelope selection for media packets.
+- `login_candidate` identifies which credential class the camera accepted
+  without disclosing the value. Candidate 2 is the empty password: note that
+  `make_cgi_request` also carries a trailing fixed pair, matching the official
+  command, so an empty-password success does not prove the stream request is
+  authorized the same way.
+
+## Measured amd64 evidence (development host, direct UDP)
+
+Captured with `tools/local_probe.py` against the physical camera. Counts only.
+
+| Stage | Result |
+| --- | --- |
+| connect | `connected`, `connect_path=direct-punch`, clean disconnect |
+| authenticate | `login_attempts=-1,-1,0`, `login_candidate=2` |
+| stream | `stream_start_command=0x60D1`, `stream_start_result=0`, **no channel-1 data** |
+
+What this settles:
+
+1. Candidates 0 and 1 are **genuinely rejected** with result `-1`; only the
+   empty password returns `0`. These are real responses, not read timeouts, so
+   the shared-deadline defect was not the cause of the varying results.
+2. `channel1_packets` and `channel1_bytes` never appear, so the camera sends no
+   media at all. The media framing in `read_video_frame` is not implicated, and
+   neither is a missing TCP relay: the session is `direct-punch` throughout.
+3. Live-start is answered `0x60D1` result `0` while media never starts, so a
+   result of `0` here does not mean the camera considers the session ready.
+4. `other_f141` counted 14 inbound `F1 41` packets **after** the session was
+   established, all ignored by the receive loop. The camera is still asking to
+   complete the readiness handshake.
+5. `F1 42` and `F1 43` were in neither wire-envelope set, so the readiness
+   reply was the only session packet sent in clear while data, acknowledgement,
+   alive, and close packets were all encrypted. This is the leading explanation
+   for finding 4 and is now sent dual-wire like `F1 41`.
+6. `packets_from_other_source` was non-zero (6) in one authenticate run and
+   absent in others, so it is real but intermittent and is not the cause of the
+   missing media.
+
+Changes made in response, one at a time:
+
+- `F1 42`/`F1 43` are now sent dual-wire. Inbound `other_f141` fell from 14 to
+  6 across comparable runs, so the camera re-punches less, but readiness is
+  still not mutual and media still does not start.
+- `F1 41` repeats are now answered while connected (`punch_repeats`). Not yet
+  measured against the camera: the runs after this change failed to connect.
+
+Sessions run back to back fail to connect at all, which matches the existing
+note about rapid reconnects. Two consecutive failures were also seen after a
+two-minute rest. Neither change can affect connect, because both only alter
+packets sent after the session exists while `connect()` runs its own loop.
+
+### Results on a second, otherwise idle account
+
+Re-measured against a freshly created account, so no other client held the
+camera. Connect became reliable again, which supports session contention or
+throttling as the cause of the earlier connect failures rather than any code
+change.
+
+7. Answering `F1 41` repeats produced `other_f143` for the first time: the
+   camera acknowledges the readiness reply, so the handshake now completes in
+   both directions. Media still does not start.
+8. Forcing live-start with the enumerated credential while skipping the login
+   probe still returns `0x60D1` result `0`, and still yields no media. The
+   credential is therefore **not** what gates the media channel, and an
+   accepted login is not a precondition for an accepted live-start.
+9. `substream=0` behaves the same as `substream=2`: accepted, no media.
+10. Packet accounting is now complete. In one run `pump_packets` (100) equalled
+    the sum of every branch counter, and no channel above 0 ever appeared. The
+    camera sends nothing on any data channel except channel 0, and no
+    unrecognized packet type other than `F1 43` and `F1 E1`. Media is not
+    arriving and being misparsed; it is never sent.
+
+## Resolved: media requires the relay session
+
+A sanitized packet capture of the official aarch64 helper on the control host
+(`tools/pi_control_capture.py`, summarized by `tools/pcap_summary.py`) settled
+it. In the official session:
+
+- Not one inbound `F1 41` was seen. The direct punch never succeeds there; the
+  client floods punches at candidate addresses, gets no answer, and falls back.
+- The relay request `F1 80` is addressed to the **directory servers**, which
+  answer `F1 81` and then `F1 82`. It is never sent to the relay itself.
+- The data session runs with the relay: `F1 83` both directions, `F1 84`
+  ready, then `F1 D0` payloads.
+
+Two corrections followed, each with a deterministic test:
+
+1. `F1 80` now goes to the directory endpoints, in both the `F1 73` branch and
+   the periodic resend. Previously it went to the relay endpoints, which never
+   produced `F1 82`, so the relay path could never complete.
+2. `CS2Session(prefer_relay=True)` is the default. A direct punch produces a
+   session that authenticates and acknowledges live-start but never streams, and
+   it otherwise wins the race and hides the relay path entirely.
+
+Measured result on amd64, twice, including with no experiment flags:
+
+```
+connect_path=relay  login_candidate=0  login_attempts=[0]  login_result=0
+channel1_packets=1237  channel1_bytes=1184793
+h264_frames=3  h264_bytes=156727  keyframe_seen=true
+stream_stop_sent=true  disconnected=true
+```
+
+Release gates 1 through 6 are therefore met on amd64. Note also:
+
+- Over the relay the **enumerated credential authenticates on the first
+  attempt**. The earlier "only the empty password works" result was an artefact
+  of the direct-punch session, not a credential problem.
+- Live-start is answered with command `0x6037` on the relay path, where the
+  direct path used `0x60D1`. Both are accepted.
+
+## Known remaining issue: connect intermittency
+
+After many sessions in quick succession the relay stops answering `F1 84`, and
+connect fails even after several minutes of rest. The negotiation histogram
+shows the stall precisely: `connect_f169`, `connect_f171`, `connect_f173`,
+`connect_f181`, and `connect_f182` all arrive with correct lengths
+(`f182_len24`, `f173_len12`), so the request is accepted and punches are sent,
+but no `F1 84` returns. During these failures the camera floods `F1 41` and
+`F1 42`, trying to force a direct session.
+
+This is not a code regression: the connect path is unchanged since the
+successful runs.
+
+It is also **not** contention with another bridge. The hypothesis was tested
+directly: with the only other consumer of this shared camera stopped for
+eleven minutes, the first run succeeded with a very clean negotiation
+(`connect_f182=15`, `connect_f184=1`, 291 packets total), and the two
+back-to-back runs immediately after it both failed in the usual way
+(`connect_f182≈200`, no `F1 84`, ~2000 packets). The camera is shared to two
+accounts and the other bridge was idle for all three runs.
+
+The pattern is a per-camera cool-down that our own preceding session causes:
+
+- A rested camera accepts the relay rendezvous almost immediately.
+- Sessions soon after a previous one stall, and during the stall the camera
+  floods `F1 41` and `F1 42`, which the relay-preferring connect loop ignores.
+- A successful run shows no inbound `F1 41`/`F1 42` at all.
+
+The leading explanation is that the previous session is still registered for
+this camera UID, so a new rendezvous is accepted (`F1 81`, `F1 82` arrive) but
+the camera never punches the relay because it is still bound to the old
+session, and instead tries to resurrect the direct path with us.
+
+### Largely resolved by two teardown corrections
+
+1. `close()` now notifies every endpoint the session touched, not just the
+   peer. A connect that never latched a peer previously sent no close at all,
+   so declined direct punches were left holding a stale binding.
+2. A declined direct readiness request (`F1 42`) is now acknowledged with
+   `F1 43` during relay-preferring connect, without adopting the sender as the
+   session peer. Leaving it unanswered made the camera retry indefinitely
+   rather than release its previous binding.
+
+Measured after both changes: four consecutive `--stage stream` runs with no
+rest between them all returned exit `0` over the relay, where previously only
+the first run after a long idle period succeeded.
+
+The behaviour is not perfect. A fifth run degraded again, and the degraded mode
+has a reliable signature worth using as a health check: the enumerated
+credential is rejected, the empty password returns a bogus `result=0`, and no
+media follows. **`login_candidate != 0` predicts a session that will not
+stream**, and is a better readiness test than the live-start result.
+
+**Product implication:** if a camera needs minutes between P2P sessions, the
+bridge must hold one session open rather than reconnect per request. The
+existing warm-hold and idle-disconnect behaviour should be re-checked against
+this constraint before release.
+
 ## Protocol findings already established
 
 1. The official transport probes the advertised UDP port plus or minus three.
@@ -100,11 +308,23 @@ does not currently point to a missing TCP relay implementation.
 5. Compare the ordered official and pure sequences from `F1 41` through the
    first channel-1 frame. Focus on missing readiness acknowledgements,
    unconsumed channel-0 responses, required delays, sequence initialization,
-   and live-start response handling.
+   and live-start response handling. Start from the `counters` block described
+   under "Reading the new helper summary" — it narrows this to one branch
+   before any packet-level comparison is needed.
 6. Change one behavior at a time and add a deterministic unit test for every
    protocol correction.
 
 ## Required release gates
+
+Current status: gates 1 to 6 are met on a development host and verified
+repeatedly. Gates 7 to 11 need environments not available during this work —
+an amd64 Home Assistant installation, a container build, the physical
+Raspberry Pi, and a registry push.
+
+**Gate 9 now matters more than it did.** The relay work is confined to
+`cs2.py`, which is amd64-only, but the live-view priming changed
+`session.py`, which both architectures share. The aarch64 regression is
+therefore no longer a formality.
 
 All of these must pass before merging or releasing `1.2.0`:
 
@@ -126,8 +346,8 @@ All of these must pass before merging or releasing `1.2.0`:
 
 ## Test status at handoff
 
-- The complete unit test suite passes: 59 tests.
-- The CS2-focused subset passes: 19 tests.
+- The complete unit test suite passes: 66 tests.
+- The CS2-focused subset passes: 26 tests.
 - `git diff --check` passes.
 - Python compilation across source, integration, app, tests, and tools passes.
 - Temporary development probes and build directories are intentionally not
