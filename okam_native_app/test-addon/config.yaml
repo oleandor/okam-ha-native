@@ -28,7 +28,7 @@ options:
 schema:
   account_username: email
   account_password: password
-  camera_password: password
+  camera_password: password?
   api_token: password
   camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
   idle_timeout_seconds: "int(10,600)"

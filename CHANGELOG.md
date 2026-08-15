@@ -12,6 +12,10 @@
 - Stops reporting a disconnected client as a crash. The supervisor polls the
   bridge and closes connections abruptly, which filled the app log with
   ConnectionResetError tracebacks for normal behaviour (issue #5).
+- Makes the camera password option genuinely optional. The bridge already fell
+  back to the enumerated credential when it was empty, but the add-on schema
+  still required a value, so the options could not be saved without one and no
+  placeholder was safe (issue #5).
 - Handles accounts that omit the camera-level credential, with an optional
   local camera-password override for changed device passwords.
 - Uses the configured camera alias as the exact suggested entity ID on a fresh

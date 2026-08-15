@@ -16,7 +16,7 @@ def test_native_bridge_is_a_prebuilt_64_bit_ha_app() -> None:
     assert "idle_timeout_seconds: 120" in config
     assert "account_username: email" in config
     assert "account_password: password" in config
-    assert "camera_password: password" in config
+    assert "camera_password: password?" in config
     assert "api_token: password" in config
     assert 'idle_timeout_seconds: "int(10,600)"' in config
     assert "run_connect_test: bool" in config
@@ -178,3 +178,14 @@ def test_test_addon_cannot_collide_with_the_installed_one() -> None:
     assert "8099/tcp: 8099" in installed
     assert "8099/tcp: 8098" in candidate
     assert "boot: manual" in candidate
+
+
+def test_camera_password_is_optional_in_both_addon_schemas() -> None:
+    # The bridge falls back to the enumerated credential when this is empty,
+    # but a schema entry without a trailing "?" is required, so the supervisor
+    # refused to save the options at all. There is no safe placeholder either:
+    # any value here overrides the credential the account hands back.
+    for name in ("config.yaml", "test-addon/config.yaml"):
+        config = (ROOT / "okam_native_app" / name).read_text(encoding="utf-8")
+        assert "  camera_password: password?\n" in config, name
+        assert "  camera_password: null\n" in config, name
