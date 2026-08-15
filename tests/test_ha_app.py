@@ -188,4 +188,7 @@ def test_camera_password_is_optional_in_both_addon_schemas() -> None:
     for name in ("config.yaml", "test-addon/config.yaml"):
         config = (ROOT / "okam_native_app" / name).read_text(encoding="utf-8")
         assert "  camera_password: password?\n" in config, name
-        assert "  camera_password: null\n" in config, name
+        # An optional option validates when the key is absent. A null default
+        # keeps it present and invalid, which the supervisor reports as the
+        # option being missing.
+        assert "  camera_password: null\n" not in config, name

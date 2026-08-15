@@ -17,7 +17,6 @@ ports_description:
 options:
   account_username: null
   account_password: null
-  camera_password: null
   api_token: null
   camera_id: cabin
   idle_timeout_seconds: 120
