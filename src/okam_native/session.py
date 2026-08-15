@@ -15,6 +15,11 @@ from .p2p import MAX_RESPONSE_BYTES, P2PError, _jpeg_dimensions
 
 StreamStarter = Callable[[], subprocess.Popen[bytes]]
 _END = object()
+ANNEX_B_START = b"\x00\x00\x01"
+# A keyframe access unit plus its parameter sets. Anything larger is treated as
+# unparsable rather than buffered indefinitely.
+MAX_PREAMBLE_BYTES = 1024 * 1024
+MAX_SCAN_BYTES = 4 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,10 @@ class NativeStreamSession:
         self._clean_disconnect: bool | None = None
         self._last_error: str | None = None
         self._media_ready = False
+        self._scan = bytearray()
+        self._sps = b""
+        self._pps = b""
+        self._keyframe = b""
         self._closed = False
 
     def acquire(self) -> StreamSubscription:
@@ -85,6 +94,11 @@ class NativeStreamSession:
                 self._start_locked()
             subscription_id = uuid.uuid4().hex
             chunks: queue.Queue[bytes | object] = queue.Queue(maxsize=32)
+            # Start the viewer on a decodable boundary. Without this it waits
+            # for the camera's next keyframe, which is the whole open latency.
+            preamble = self._preamble()
+            if preamble:
+                chunks.put_nowait(preamble)
             self._subscribers[subscription_id] = chunks
             return StreamSubscription(self, subscription_id, chunks)
 
@@ -162,6 +176,48 @@ class NativeStreamSession:
             if writer is not None:
                 writer.join(timeout=5)
 
+    def _note_media(self, chunk: bytes) -> None:
+        """Remember the parameter sets and newest keyframe from the stream.
+
+        Chunks are arbitrary reads rather than NAL-aligned, so units are
+        reassembled across boundaries before being classified.
+        """
+
+        scan = self._scan
+        scan.extend(chunk)
+        if len(scan) > MAX_SCAN_BYTES:
+            del scan[: len(scan) - MAX_SCAN_BYTES]
+        starts = []
+        position = scan.find(ANNEX_B_START)
+        while position >= 0:
+            starts.append(position)
+            position = scan.find(ANNEX_B_START, position + len(ANNEX_B_START))
+        if len(starts) < 2:
+            return
+        for begin, end in zip(starts, starts[1:]):
+            self._record_unit(bytes(scan[begin:end]))
+        # Keep the trailing unit: it is still incomplete.
+        del scan[: starts[-1]]
+
+    def _record_unit(self, unit: bytes) -> None:
+        if len(unit) <= len(ANNEX_B_START) or len(unit) > MAX_PREAMBLE_BYTES:
+            return
+        kind = unit[len(ANNEX_B_START)] & 0x1F
+        if kind == 7:
+            self._sps = unit
+        elif kind == 8:
+            self._pps = unit
+        elif kind == 5:
+            self._keyframe = unit
+
+    def _preamble(self) -> bytes:
+        """The bytes a new viewer needs before live data makes sense."""
+
+        if not self._sps or not self._pps:
+            return b""
+        preamble = self._sps + self._pps + self._keyframe
+        return preamble if len(preamble) <= MAX_PREAMBLE_BYTES else b""
+
     def status(self) -> SessionStatus:
         with self._lock:
             return SessionStatus(
@@ -186,6 +242,9 @@ class NativeStreamSession:
         self._clean_disconnect = None
         self._last_error = None
         self._media_ready = False
+        # A new helper means a new encoder state, so cached units are stale.
+        self._scan.clear()
+        self._sps = self._pps = self._keyframe = b""
         process = self._starter()
         if process.stdout is None or process.stderr is None:
             process.kill()
@@ -211,6 +270,7 @@ class NativeStreamSession:
                     break
                 with self._lock:
                     self._media_ready = True
+                    self._note_media(chunk)
                     subscribers = tuple(self._subscribers.values())
                 for chunks in subscribers:
                     try:
