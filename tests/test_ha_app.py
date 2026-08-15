@@ -192,3 +192,17 @@ def test_camera_password_is_optional_in_both_addon_schemas() -> None:
         # keeps it present and invalid, which the supervisor reports as the
         # option being missing.
         assert "  camera_password: null\n" not in config, name
+
+
+def test_watchdog_targets_a_declared_container_port() -> None:
+    # [PORT:n] names the container port, which the supervisor resolves to the
+    # host port. Pointing it at the host side matches nothing, the watchdog
+    # never resolves, and the app is restarted underneath a live stream.
+    import re
+
+    for name in ("config.yaml", "test-addon/config.yaml"):
+        config = (ROOT / "okam_native_app" / name).read_text(encoding="utf-8")
+        watched = re.search(r"watchdog:.*\[PORT:(\d+)\]", config)
+        assert watched is not None, name
+        declared = set(re.findall(r"^  (\d+)/tcp:", config, re.MULTILINE))
+        assert watched.group(1) in declared, name

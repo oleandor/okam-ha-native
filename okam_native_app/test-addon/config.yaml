@@ -9,7 +9,7 @@ arch:
   - amd64
 startup: application
 boot: manual
-watchdog: http://[HOST]:[PORT:8098]/health
+watchdog: http://[HOST]:[PORT:8099]/health
 ports:
   8099/tcp: 8098
 ports_description:
