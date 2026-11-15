@@ -7,22 +7,26 @@ import asyncio
 import json
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from pathlib import Path
 
 from okam_native.account import AccountDevice, AccountError, Eye4AccountClient
 from okam_native.bridge import CameraBridge, QuietThreadingHTTPServer, make_handler
 from okam_native.p2p import (
     P2PError,
+    channel_probe_lines,
     diagnostic_line,
     get_service_parameter,
     open_stream_process,
     resolve_client_id,
     run_authentication_probe,
+    run_channel_probe,
     run_connect_probe,
     run_snapshot_probe,
     run_stream_probe,
@@ -64,7 +68,8 @@ STATUS: dict[str, object] = {
     "phase": "starting",
 }
 LOCK = threading.Lock()
-BRIDGE: CameraBridge | None = None
+BRIDGES: dict[str, CameraBridge] = {}
+ALIAS_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
 def set_status(**values: object) -> None:
@@ -75,30 +80,39 @@ def set_status(**values: object) -> None:
 def get_status() -> dict[str, object]:
     with LOCK:
         payload = dict(STATUS)
-        bridge = BRIDGE
-    if bridge is not None:
-        session = bridge.session.status()
+        bridges = dict(BRIDGES)
+    if bridges:
+        sessions = {alias: bridge.session.status() for alias, bridge in bridges.items()}
+        running = any(session.running for session in sessions.values())
+        streaming = any(
+            session.running and session.media_ready for session in sessions.values()
+        )
         payload.update(
-            stream_running=session.running,
-            stream_viewers=session.viewers,
-            stream_media_ready=session.media_ready,
-            idle_timeout_seconds=int(bridge.session.idle_timeout),
-            clean_disconnect=session.clean_disconnect,
-            stream_error=session.last_error,
+            camera_count=len(bridges),
+            stream_running=running,
+            stream_viewers=sum(session.viewers for session in sessions.values()),
+            stream_media_ready=streaming,
             phase=(
-                "streaming"
-                if session.running and session.media_ready
-                else "camera_waking"
-                if session.running
-                else "bridge_ready"
+                "streaming" if streaming else "camera_waking" if running else "bridge_ready"
             ),
+            cameras={
+                alias: {
+                    "stream_running": session.running,
+                    "stream_viewers": session.viewers,
+                    "stream_media_ready": session.media_ready,
+                    "idle_timeout_seconds": int(bridges[alias].session.idle_timeout),
+                    "clean_disconnect": session.clean_disconnect,
+                    "stream_error": session.last_error,
+                }
+                for alias, session in sessions.items()
+            },
         )
     return payload
 
 
-def get_bridge() -> CameraBridge | None:
+def get_bridges() -> dict[str, CameraBridge]:
     with LOCK:
-        return BRIDGE
+        return dict(BRIDGES)
 
 
 def load_vendor_runtime() -> None:
@@ -169,32 +183,135 @@ def load_options() -> dict[str, object]:
     return value
 
 
-def enumerate_account() -> AccountDevice | None:
+def _slug(name: str) -> str:
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", ascii_name.lower()).strip("_")[:32]
+
+
+def select_cameras(
+    devices: list[AccountDevice], options: dict[str, object]
+) -> list[tuple[str, AccountDevice]]:
+    """Pair account cameras with stable, unique aliases.
+
+    With a ``cameras`` list in the options, only the named cameras are exposed,
+    under the aliases given there. Without it, a single camera keeps the
+    original ``camera_id`` option and several cameras get aliases derived from
+    their names (``camera_N`` when a name has no ASCII letters, as with Thai).
+    """
+
+    if not devices:
+        raise AccountError("O-KAM account does not expose any camera")
+    configured = options.get("cameras") or []
+    if not isinstance(configured, list):
+        raise RuntimeError("cameras option is invalid")
+    selected: list[tuple[str, AccountDevice]] = []
+    if configured:
+        by_name = {device.name.strip().casefold(): device for device in devices}
+        for item in configured:
+            if not isinstance(item, dict):
+                raise RuntimeError("cameras option is invalid")
+            name = item.get("name")
+            alias = item.get("camera_id")
+            if not isinstance(name, str) or not isinstance(alias, str):
+                raise RuntimeError("cameras option is invalid")
+            if not ALIAS_PATTERN.fullmatch(alias):
+                raise RuntimeError("camera alias is invalid")
+            device = by_name.get(name.strip().casefold())
+            if device is None:
+                # Name only, never the vendor identifier.
+                print(f"camera_not_in_account name={name!r}", flush=True)
+                continue
+            selected.append((alias, device))
+        if not selected:
+            raise AccountError("none of the configured cameras is in the O-KAM account")
+    elif len(devices) == 1:
+        alias = options.get("camera_id") or "cabin"
+        if not isinstance(alias, str) or not ALIAS_PATTERN.fullmatch(alias):
+            raise RuntimeError("camera alias is invalid")
+        selected.append((alias, devices[0]))
+    else:
+        for index, device in enumerate(devices, start=1):
+            selected.append((_slug(device.name) or f"camera_{index}", device))
+    seen: set[str] = set()
+    for alias, _device in selected:
+        if alias in seen:
+            raise RuntimeError(f"camera alias is duplicated: {alias}")
+        seen.add(alias)
+    return selected
+
+
+def configured_camera_password(alias: str, options: dict[str, object]) -> object:
+    """The camera login override for one alias.
+
+    A ``password`` on the matching ``cameras`` entry wins over the app-wide
+    ``camera_password``, because cameras on one account can have different
+    passwords and a single override would break the others.
+    """
+
+    for item in options.get("cameras") or []:
+        if isinstance(item, dict) and item.get("camera_id") == alias:
+            password = item.get("password")
+            if password not in (None, ""):
+                return password
+    return options.get("camera_password")
+
+
+def pc_client_live_start(alias: str, options: dict[str, object]) -> bool:
+    """Whether to start live view the way the official PC client does.
+
+    Off by default, so cameras get the original single livestream command. A
+    ``pc_client_live_start`` on the matching ``cameras`` entry wins over the
+    app-wide option of the same name.
+    """
+
+    for item in options.get("cameras") or []:
+        if isinstance(item, dict) and item.get("camera_id") == alias:
+            value = item.get("pc_client_live_start")
+            if isinstance(value, bool):
+                return value
+    return options.get("pc_client_live_start") is True
+
+
+def pc_client_fields(
+    alias: str, device: AccountDevice, client_id: str, options: dict[str, object]
+) -> dict[str, str]:
+    """Optional helper fields for the PC-client live start, empty when off."""
+
+    if not pc_client_live_start(alias, options):
+        return {}
+    return {
+        "account_user_id": device.account_user_id,
+        "virtual_uid": device.uid if client_id != device.uid else "",
+    }
+
+
+def enumerate_account() -> list[tuple[str, AccountDevice]]:
     options = load_options()
     username = options.get("account_username")
     password = options.get("account_password")
-    alias = options.get("camera_id") or "cabin"
     if not isinstance(username, str) or not username or not isinstance(password, str) or not password:
         set_status(configuration_required=True)
-        return None
-    if not isinstance(alias, str):
-        raise RuntimeError("camera alias is invalid")
+        return []
     set_status(phase="enumerating_account", configuration_required=False)
     try:
         devices = Eye4AccountClient().enumerate(username, password)
     finally:
         username = ""
         password = ""
-    if len(devices) != 1:
-        raise AccountError("O-KAM account must expose exactly one camera")
+    cameras = select_cameras(devices, options)
     set_status(
         account_ready=True,
-        device_count=1,
-        camera_alias=alias,
+        device_count=len(devices),
+        camera_aliases=[alias for alias, _device in cameras],
         phase="account_enumerated",
     )
-    print("account_enumerated=true device_count=1", flush=True)
-    return devices[0]
+    print(
+        f"account_enumerated=true device_count={len(devices)} "
+        f"camera_count={len(cameras)} "
+        f"aliases={','.join(alias for alias, _device in cameras)}",
+        flush=True,
+    )
+    return cameras
 
 
 def p2p_environment() -> dict[str, str]:
@@ -212,7 +329,7 @@ def p2p_environment() -> dict[str, str]:
     return environment
 
 
-def run_p2p_acceptance(device: AccountDevice) -> None:
+def run_p2p_acceptance(device: AccountDevice, alias: str = "") -> None:
     options = load_options()
     enabled = options.get("run_connect_test") is True
     auth_enabled = options.get("run_auth_test") is True
@@ -229,7 +346,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
     if not enabled and not auth_enabled and not stream_enabled:
         return
     camera_password = select_camera_password(
-        device.device_password, options.get("camera_password")
+        device.device_password, configured_camera_password(alias, options)
     )
     credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
     if credentials is None:
@@ -301,7 +418,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 set_status(p2p_ready=True, camera_authenticated=True)
             if not (result.connected and result.authenticated and result.disconnected):
                 print(
-                    "camera_authentication=false "
+                    f"camera={alias} camera_authentication=false "
                     f"connect_state={result.connect_state} "
                     f"login_sent={str(result.login_sent).lower()} "
                     f"login_response_received={str(result.login_response_received).lower()} "
@@ -331,7 +448,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                     connect_attempt=attempt,
                 )
                 print(
-                    f"snapshot_created=true width={result.width} "
+                    f"camera={alias} snapshot_created=true width={result.width} "
                     f"height={result.height} bytes={len(result.jpeg)} "
                     "clean_disconnect=true",
                     flush=True,
@@ -344,13 +461,13 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                     connect_attempt=attempt,
                 )
                 print(
-                    f"h264_received=true frames={result.h264_frames} "
+                    f"camera={alias} h264_received=true frames={result.h264_frames} "
                     f"bytes={result.h264_bytes} clean_disconnect=true",
                     flush=True,
                 )
                 return
             print(
-                "h264_received=false "
+                f"camera={alias} h264_received=false "
                 f"stream_start_sent={str(result.stream_start_sent).lower()} "
                 f"stream_stop_sent={str(result.stream_stop_sent).lower()} "
                 f"frames={result.h264_frames} bytes={result.h264_bytes} "
@@ -369,11 +486,11 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 login_command=result.login_command,
                 login_result=result.login_result,
             )
-            print("camera_authenticated=true clean_disconnect=true", flush=True)
+            print(f"camera={alias} camera_authenticated=true clean_disconnect=true", flush=True)
             return
         if not auth_enabled and result.connected and result.disconnected:
             set_status(p2p_ready=True, phase="p2p_connected", connect_attempt=attempt)
-            print("p2p_connected=true clean_disconnect=true", flush=True)
+            print(f"camera={alias} p2p_connected=true clean_disconnect=true", flush=True)
             return
         if attempt < 3:
             time.sleep(5)
@@ -381,33 +498,56 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
     raise P2PError("camera did not establish a native P2P session")
 
 
-def configure_bridge(device: AccountDevice) -> CameraBridge | None:
-    """Prepare the long-lived, on-demand runtime without waking the camera."""
+def configure_bridges(cameras: list[tuple[str, AccountDevice]]) -> dict[str, CameraBridge]:
+    """Prepare one long-lived, on-demand runtime per camera without waking any."""
 
-    global BRIDGE
     options = load_options()
     api_token = options.get("api_token")
-    alias = options.get("camera_id") or "cabin"
     idle_timeout = options.get("idle_timeout_seconds", 120)
-    camera_password = select_camera_password(
-        device.device_password, options.get("camera_password")
-    )
     if not isinstance(api_token, str) or not 16 <= len(api_token) <= 1024:
         set_status(configuration_required=True, camera_ready=False, phase="api_token_required")
         print("bridge_ready=false configuration_required=api_token", flush=True)
-        return None
-    if not isinstance(alias, str):
-        raise RuntimeError("camera alias is invalid")
+        return {}
     if not isinstance(idle_timeout, int) or not 10 <= idle_timeout <= 600:
         raise RuntimeError("idle timeout is invalid")
     credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
     if credentials is None:
         raise WakeError("official wake configuration was unavailable")
+
+    bridges: dict[str, CameraBridge] = {}
+    for alias, device in cameras:
+        bridges[alias] = _build_bridge(
+            alias, device, options, api_token, float(idle_timeout), credentials
+        )
+    with LOCK:
+        BRIDGES.clear()
+        BRIDGES.update(bridges)
+    set_status(
+        camera_ready=True,
+        configuration_required=False,
+        phase="bridge_ready",
+        idle_timeout_seconds=idle_timeout,
+    )
+    print(f"bridge_ready=true camera_count={len(bridges)}", flush=True)
+    return bridges
+
+
+def _build_bridge(
+    alias: str,
+    device: AccountDevice,
+    options: dict[str, object],
+    api_token: str,
+    idle_timeout: float,
+    credentials: object,
+) -> CameraBridge:
+    camera_password = select_camera_password(
+        device.device_password, configured_camera_password(alias, options)
+    )
     client_id = resolve_client_id(device.uid)
     service_parameter = get_service_parameter(client_id)
 
     def start_stream() -> subprocess.Popen[bytes]:
-        set_status(phase="waking_camera_on_demand")
+        set_status(phase="waking_camera_on_demand", waking_camera=alias)
         try:
             wake = asyncio.run(wake_camera(device.uid, credentials, timeout=12.0))
             set_status(
@@ -415,8 +555,15 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
                 wake_responsive_servers=wake.responsive_servers,
                 phase="starting_native_stream",
             )
+            print(
+                f"stream_starting camera={alias} wake_requested="
+                f"{str(wake.requested).lower()} "
+                f"wake_responsive_servers={wake.responsive_servers}",
+                flush=True,
+            )
         except WakeError:
             set_status(phase="starting_native_stream")
+            print(f"stream_starting camera={alias} wake_requested=false", flush=True)
         return open_stream_process(
             str(CONNECT_HELPER),
             str(LIBRARY),
@@ -424,31 +571,60 @@ def configure_bridge(device: AccountDevice) -> CameraBridge | None:
             service_parameter,
             camera_password,
             environment=p2p_environment(),
+            **pc_client_fields(alias, device, client_id, options),
         )
 
-    session = NativeStreamSession(start_stream, idle_timeout=float(idle_timeout))
-    bridge = CameraBridge(
+    session = NativeStreamSession(
+        start_stream,
+        idle_timeout=idle_timeout,
+        name=alias,
+        log=lambda line: print(line, flush=True),
+    )
+    return CameraBridge(
         camera_id=alias,
         camera_name=device.name,
         api_token=api_token,
         session=session,
         ffmpeg=str(FFMPEG),
     )
-    with LOCK:
-        BRIDGE = bridge
-    set_status(
-        camera_ready=True,
-        configuration_required=False,
-        phase="bridge_ready",
-        idle_timeout_seconds=idle_timeout,
-    )
-    print("bridge_ready=true camera_count=1", flush=True)
-    return bridge
+
+
+def run_requested_channel_probe(cameras: list[tuple[str, AccountDevice]]) -> None:
+    """Report which P2P channels carry video for the ``probe_camera`` alias."""
+
+    options = load_options()
+    target = options.get("probe_camera")
+    if not isinstance(target, str) or not target:
+        return
+    for alias, device in cameras:
+        if alias != target:
+            continue
+        try:
+            password = select_camera_password(
+                device.device_password, configured_camera_password(alias, options)
+            )
+            client_id = resolve_client_id(device.uid)
+            payload = run_channel_probe(
+                str(CONNECT_HELPER),
+                str(LIBRARY),
+                client_id,
+                get_service_parameter(client_id),
+                password,
+                environment=p2p_environment(),
+                **pc_client_fields(alias, device, client_id, options),
+            )
+        except P2PError:
+            print(f"channel_probe camera={alias} failed=true", flush=True)
+            return
+        for line in channel_probe_lines(alias, payload):
+            print(line, flush=True)
+        return
+    print(f"channel_probe camera={target} not_found=true", flush=True)
 
 
 def main() -> int:
     server = QuietThreadingHTTPServer(
-        ("0.0.0.0", 8099), make_handler(get_status, get_bridge)
+        ("0.0.0.0", 8099), make_handler(get_status, get_bridges)
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     stop = threading.Event()
@@ -460,19 +636,29 @@ def main() -> int:
     signal.signal(signal.SIGINT, request_stop)
     try:
         load_vendor_runtime()
-        device = enumerate_account()
-        if device is not None:
-            run_p2p_acceptance(device)
-            configure_bridge(device)
+        cameras = enumerate_account()
+        run_requested_channel_probe(cameras)
+        for alias, device in cameras:
+            # One unreachable camera must not take the others down with it.
+            try:
+                run_p2p_acceptance(device, alias)
+            except P2PError:
+                print(f"camera_diagnostic_failed camera={alias}", flush=True)
+        if cameras:
+            configure_bridges(cameras)
     except Exception as error:
         phase = "startup_error" if STATUS["loader_ready"] else "native_loader_error"
-        detail = str(error).replace(" ", "_") if isinstance(error, P2PError) else None
+        # Both exception types carry fixed, identifier-free messages.
+        detail = (
+            str(error).replace(" ", "_")
+            if isinstance(error, (P2PError, AccountError))
+            else None
+        )
         set_status(phase=phase, error=type(error).__name__, error_detail=detail)
         suffix = f" detail={detail}" if detail else ""
         print(f"startup_ready=false error={type(error).__name__}{suffix}", flush=True)
     stop.wait()
-    bridge = get_bridge()
-    if bridge is not None:
+    for bridge in get_bridges().values():
         bridge.session.close()
     server.shutdown()
     server.server_close()

@@ -1,7 +1,7 @@
 configuration:
   account_username:
     name: O-KAM account email
-    description: Email address of an O-KAM account that can view exactly one camera.
+    description: Email address of the O-KAM account that can view your cameras.
   account_password:
     name: O-KAM account password
     description: Password for the O-KAM account.
@@ -10,7 +10,10 @@ configuration:
     description: A random secret of at least 16 characters that you create and also enter in the Home Assistant integration.
   camera_id:
     name: Camera alias
-    description: Local Home Assistant name for the camera, for example cabin.
+    description: Local Home Assistant name for the camera when the account has only one camera, for example cabin.
+  cameras:
+    name: Cameras
+    description: Optional. One entry per camera to expose, with name exactly as shown in the O-KAM app a local camera_id alias, and an optional password when that camera's local password differs from the others. Leave empty to expose every camera in the account.
   idle_timeout_seconds:
     name: Idle disconnect delay
     description: Seconds to wait after the final viewer closes before stopping and disconnecting the camera.
@@ -26,5 +29,11 @@ configuration:
   run_snapshot_test:
     name: Run complete snapshot diagnostic
     description: Wake, connect, authenticate, receive H.264, create one JPEG, and disconnect when the app starts. Leave disabled for normal use.
+  probe_camera:
+    name: Channel probe camera
+    description: Optional camera alias. At startup, try each live substream on that camera and log which P2P channels carry video. For diagnosing cameras that send no video, such as multi-lens models. Leave empty for normal use.
+  pc_client_live_start:
+    name: PC-client live start (compatibility)
+    description: Start live view like the official O-KAM PC client, with extra preparation commands, the account user id and the virtual device id. Only for cameras that connect but send no video, such as some multi-lens models. Leave disabled when live view works. A cameras entry can set it per camera.
 network:
   8099/tcp: Local bridge API used by the Home Assistant integration

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.3.0
+
+Community contributions from the forks of this repository, ported with the
+single-camera path kept exactly as before.
+
+- Exposes several cameras from one app. An account with one camera keeps
+  using `camera_id` and its existing entity; accounts with several cameras no
+  longer fail with "must expose exactly one camera" (issue #9). The optional
+  `cameras` list selects cameras by name, sets their aliases, and can carry a
+  per-camera `password`. From thananchaiDev/okam-ha-native.
+- Forwards H.265 video instead of dropping it, and builds FFmpeg with the
+  LGPL H.265 demuxer, parser and decoder for muxing and snapshots. Nothing is
+  re-encoded, so H.264 cameras cost no extra CPU. From thananchaiDev.
+- Keeps the stream URL valid across app restarts and updates; it previously
+  answered 401 until the integration was reloaded. From thananchaiDev.
+- Stops a live session that delivers no video within 90 seconds and logs one
+  sanitized `stream_ended` summary per session, including why the helper
+  stopped. From thananchaiDev.
+- Reports why the account step failed (`step=summary|login|devices` with the
+  error class or HTTP status) instead of a bare `AccountError`. From
+  D5ckozlo/okam-ha-native-multicam.
+- Adds two diagnostics for cameras that connect but send no video, both off
+  by default: `probe_camera` logs which channels carry data, and
+  `pc_client_live_start` starts live view like the official PC client. From
+  thananchaiDev.
+
 ## 1.2.1
 
 - Shows the release notes in the app update dialog. The supervisor reads a

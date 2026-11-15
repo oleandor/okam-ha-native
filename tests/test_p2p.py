@@ -319,3 +319,151 @@ def test_diagnostic_line_renders_silent_login_candidates() -> None:
     )
 
     assert "login_attempts=-1,none" in diagnostic_line(result)
+
+
+def test_channel_probe_lines_are_sanitized_and_per_substream() -> None:
+    from okam_native.p2p import channel_probe_lines
+
+    payload = {
+        "connected": True,
+        "authenticated": True,
+        "login_result": 0,
+        "uid": "SECRET-UID",
+        "probes": [
+            {"substream": 2, "start_sent": True, "channels": []},
+            {
+                "substream": 4,
+                "start_sent": True,
+                "channels": [
+                    {"channel": 2, "bytes": 51200, "magic": 0xA815AA55, "type": 16},
+                    {"channel": 3, "bytes": 1024, "magic": 1, "type": 0},
+                ],
+            },
+        ],
+    }
+    lines = channel_probe_lines("side", payload)
+    assert lines[0] == "channel_probe camera=side connected=true authenticated=true login_result=0"
+    assert lines[1] == "channel_probe camera=side substream=2 start_sent=true channels=none"
+    assert lines[2] == (
+        "channel_probe camera=side substream=4 start_sent=true "
+        "ch2=51200b/magic=a815aa55/type=16 ch3=1024b/magic=00000001/type=0"
+    )
+    assert all("SECRET-UID" not in line for line in lines)
+
+
+def test_channel_probe_lines_tolerate_a_failed_login() -> None:
+    from okam_native.p2p import channel_probe_lines
+
+    lines = channel_probe_lines("side", {"connected": True, "authenticated": False, "login_result": -1})
+    assert lines == [
+        "channel_probe camera=side connected=true authenticated=false login_result=-1"
+    ]
+
+
+def test_channel_probe_lines_include_nvr_live_start_results() -> None:
+    from okam_native.p2p import channel_probe_lines
+
+    payload = {
+        "connected": True,
+        "authenticated": True,
+        "login_result": 0,
+        "probes": [],
+        "nvr_probes": [
+            {"chns": 7, "streammask": 0, "start_sent": True,
+             "channels": [{"channel": 2, "bytes": 4096, "magic": 0xA815AA55, "type": 0}]},
+            {"chns": 1, "streammask": 1, "start_sent": False, "channels": []},
+        ],
+    }
+    lines = channel_probe_lines("side", payload)
+    assert lines[1] == (
+        "channel_probe camera=side nvr_chns=7 streammask=0 start_sent=true "
+        "ch2=4096b/magic=a815aa55/type=0"
+    )
+    assert lines[2] == "channel_probe camera=side nvr_chns=1 streammask=1 start_sent=false channels=none"
+
+
+def test_channel_probe_lines_report_status_flags_and_command_results() -> None:
+    from okam_native.p2p import channel_probe_lines
+
+    payload = {
+        "connected": True,
+        "authenticated": True,
+        "login_result": 0,
+        "status": {
+            "requested": True,
+            "responses": 2,
+            "flags": {"support_mutil_sensor_stream": 1, "dev_sensor_num": 3,
+                      "alias": 7, "password": 1234},
+        },
+        "probes": [
+            {"substream": 2, "start_sent": True, "responses": 1,
+             "last_command": 24631, "last_result": -1, "channels": []},
+            {"substream": 1, "start_sent": True, "responses": 0,
+             "last_command": 0, "last_result": None, "channels": []},
+        ],
+    }
+    lines = channel_probe_lines("side", payload)
+    assert lines[1] == (
+        "channel_probe camera=side status requested=true responses=2 "
+        "flags=support_mutil_sensor_stream=1,dev_sensor_num=3"
+    )
+    assert lines[2] == (
+        "channel_probe camera=side substream=2 start_sent=true responses=1 "
+        "last_command=24631 last_result=-1 channels=none"
+    )
+    assert "last_result=-" in lines[3]
+    assert all("password" not in line and "alias=7" not in line for line in lines)
+
+
+def test_open_stream_process_appends_a_numeric_account_user_id(monkeypatch) -> None:
+    from okam_native.p2p import _field
+
+    recorded = {}
+
+    class Input:
+        def write(self, value):
+            recorded["input"] = value
+
+        def close(self):
+            pass
+
+    class Process:
+        stdin = Input()
+        stdout = object()
+        stderr = object()
+
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: Process())
+    base = _field("id") + _field("param") + _field("pw")
+    open_stream_process("/h", "/l", "id", "param", "pw", environment={}, account_user_id="1234")
+    assert recorded["input"] == base + _field("1234")
+    open_stream_process("/h", "/l", "id", "param", "pw", environment={}, account_user_id="12ab")
+    assert recorded["input"] == base
+    open_stream_process("/h", "/l", "id", "param", "pw", environment={})
+    assert recorded["input"] == base
+
+
+def test_open_stream_process_appends_the_virtual_id_after_the_user_id(monkeypatch) -> None:
+    from okam_native.p2p import _field
+
+    recorded = {}
+
+    class Input:
+        def write(self, value):
+            recorded["input"] = value
+
+        def close(self):
+            pass
+
+    class Process:
+        stdin = Input()
+        stdout = object()
+        stderr = object()
+
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: Process())
+    base = _field("real") + _field("param") + _field("pw")
+    open_stream_process("/h", "/l", "real", "param", "pw", environment={},
+                        account_user_id="42", virtual_uid="VIRT1234567X")
+    assert recorded["input"] == base + _field("42") + _field("VIRT1234567X")
+    open_stream_process("/h", "/l", "real", "param", "pw", environment={},
+                        virtual_uid="VIRT1234567X")
+    assert recorded["input"] == base + _field("-") + _field("VIRT1234567X")

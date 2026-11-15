@@ -27,6 +27,10 @@ class AccountDevice:
     uid: str = field(repr=False)
     name: str
     device_password: str = field(repr=False)
+    # The O-KAM account's numeric user id. The official PC client sends it as
+    # `userId` with every camera command; newer cameras bound to the account
+    # (VUID devices) stream video only to commands that carry it.
+    account_user_id: str = field(default="", repr=False)
 
 
 OpenRequest = Callable[[urllib.request.Request, float], bytes]
@@ -40,6 +44,20 @@ def _open_request(request: urllib.request.Request, timeout: float) -> bytes:
     if len(payload) > MAX_RESPONSE_BYTES:
         raise AccountError("official account service response was too large")
     return payload
+
+
+# Step labels for diagnostics, so error messages never carry service routes.
+_REQUEST_STEPS = {
+    "/user/summary": "summary",
+    "/login/token": "login",
+    "/PC/device/show": "devices",
+}
+
+
+def _request_failure(path: str, error_type: str, extra: str = "") -> str:
+    step = _REQUEST_STEPS.get(path, "request")
+    message = f"official account service request failed step={step} error_type={error_type}"
+    return f"{message} {extra}" if extra else message
 
 
 class Eye4AccountClient:
@@ -80,8 +98,19 @@ class Eye4AccountClient:
             result = json.loads(payload.decode("utf-8"))
         except AccountError:
             raise
-        except (OSError, UnicodeError, json.JSONDecodeError, urllib.error.URLError):
-            raise AccountError("official account service request failed") from None
+        except urllib.error.HTTPError as error:
+            raise AccountError(
+                _request_failure(path, "HTTPError", f"http_status={error.code}")
+            ) from None
+        except urllib.error.URLError as error:
+            # Only the class of the underlying reason: its text can carry a
+            # hostname or address.
+            reason = type(getattr(error, "reason", None)).__name__
+            raise AccountError(
+                _request_failure(path, "URLError", f"reason_type={reason}")
+            ) from None
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise AccountError(_request_failure(path, type(error).__name__)) from None
         return result
 
     def enumerate(self, username: str, password: str) -> list[AccountDevice]:
@@ -130,6 +159,7 @@ class Eye4AccountClient:
                     uid=uid,
                     name=name if isinstance(name, str) and name else "O-KAM camera",
                     device_password=device_password if isinstance(device_password, str) else "",
+                    account_user_id=str(user_id),
                 )
             )
         return result

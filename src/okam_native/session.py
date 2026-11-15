@@ -14,12 +14,77 @@ from .p2p import MAX_RESPONSE_BYTES, P2PError, _jpeg_dimensions
 
 
 StreamStarter = Callable[[], subprocess.Popen[bytes]]
+LogSink = Callable[[str], None]
 _END = object()
+# Sanitized structural fields of the helper's final summary that are safe to
+# log: no identifiers, credentials, endpoints or payload bytes.
+SUMMARY_LOG_FIELDS = (
+    "connected",
+    "connect_state",
+    "login_sent",
+    "login_response_received",
+    "authenticated",
+    "login_command",
+    "login_result",
+    "stream_start_sent",
+    "h264_frames",
+    "h265_frames",
+    "keyframe_seen",
+    "stream_end_reason",
+    "last_magic",
+    "last_frame_type",
+    "disconnected",
+)
 ANNEX_B_START = b"\x00\x00\x01"
 # A keyframe access unit plus its parameter sets. Anything larger is treated as
 # unparsable rather than buffered indefinitely.
 MAX_PREAMBLE_BYTES = 1024 * 1024
 MAX_SCAN_BYTES = 4 * 1024 * 1024
+# How much of a fresh stream to inspect before assuming H.264.
+MAX_CODEC_PROBE_BYTES = 2 * 1024 * 1024
+# An H.265 VPS NAL header (type 32). H.264 never uses NAL type 0, which is what
+# this byte pair would be in H.264, so it is an unambiguous H.265 marker.
+HEVC_VPS = b"\x00\x00\x01\x40\x01"
+HEVC_PARAMETER_SETS = (b"\x00\x00\x01\x42\x01", b"\x00\x00\x01\x44\x01")
+H264_SPS_TYPES = frozenset({0x27, 0x47, 0x67})
+
+
+def detect_codec(data: bytes) -> str | None:
+    """Name the Annex-B codec in ``data`` once a parameter set identifies it.
+
+    Returns ``"hevc"`` or ``"h264"`` (FFmpeg's raw demuxer names), or None
+    while neither has been seen yet.
+    """
+
+    if HEVC_VPS in data or any(marker in data for marker in HEVC_PARAMETER_SETS):
+        return "hevc"
+    position = data.find(ANNEX_B_START)
+    while 0 <= position < len(data) - len(ANNEX_B_START):
+        if data[position + len(ANNEX_B_START)] in H264_SPS_TYPES:
+            return "h264"
+        position = data.find(ANNEX_B_START, position + 1)
+    return None
+
+
+def probe_codec(chunks: Iterator[bytes]) -> tuple[str, list[bytes]]:
+    """Read from a live subscription until the codec is known.
+
+    Returns the codec and every chunk consumed, which the caller must still
+    deliver. Falls back to H.264, the historical default, when the stream ends
+    or the probe limit is reached without a parameter set.
+    """
+
+    consumed: list[bytes] = []
+    seen = bytearray()
+    for chunk in chunks:
+        consumed.append(chunk)
+        seen.extend(chunk)
+        codec = detect_codec(bytes(seen))
+        if codec is not None:
+            return codec, consumed
+        if len(seen) >= MAX_CODEC_PROBE_BYTES:
+            break
+    return "h264", consumed
 
 
 @dataclass(frozen=True)
@@ -66,9 +131,23 @@ class StreamSubscription:
 
 
 class NativeStreamSession:
-    def __init__(self, starter: StreamStarter, *, idle_timeout: float = 120.0) -> None:
+    def __init__(
+        self,
+        starter: StreamStarter,
+        *,
+        idle_timeout: float = 120.0,
+        media_timeout: float = 90.0,
+        name: str = "",
+        log: LogSink | None = None,
+    ) -> None:
         self._starter = starter
         self.idle_timeout = idle_timeout
+        # A helper that never delivers H.264 would otherwise hold its viewers
+        # (and the camera) forever, because a viewer only notices it has gone
+        # when media or the end of the stream reaches it.
+        self.media_timeout = media_timeout
+        self._name = name
+        self._log = log
         self._lock = threading.RLock()
         self._process: subprocess.Popen[bytes] | None = None
         self._subscribers: dict[str, queue.Queue[bytes | object]] = {}
@@ -80,7 +159,9 @@ class NativeStreamSession:
         self._scan = bytearray()
         self._sps = b""
         self._pps = b""
+        self._vps = b""
         self._keyframe = b""
+        self._codec: str | None = None
         self._closed = False
 
     def acquire(self) -> StreamSubscription:
@@ -117,6 +198,8 @@ class NativeStreamSession:
         decoder: subprocess.Popen[bytes] | None = None
         writer: threading.Thread | None = None
         try:
+            chunks = iter(subscription)
+            codec, initial = probe_codec(chunks)
             decoder = subprocess.Popen(
                 [
                     ffmpeg,
@@ -124,7 +207,7 @@ class NativeStreamSession:
                     "-loglevel",
                     "error",
                     "-f",
-                    "h264",
+                    codec,
                     "-i",
                     "pipe:0",
                     "-frames:v",
@@ -147,7 +230,9 @@ class NativeStreamSession:
 
             def feed() -> None:
                 try:
-                    for chunk in subscription:
+                    for chunk in initial:
+                        decoder_input.write(chunk)
+                    for chunk in chunks:
                         decoder_input.write(chunk)
                 except (BrokenPipeError, OSError):
                     pass
@@ -202,6 +287,19 @@ class NativeStreamSession:
     def _record_unit(self, unit: bytes) -> None:
         if len(unit) <= len(ANNEX_B_START) or len(unit) > MAX_PREAMBLE_BYTES:
             return
+        if self._codec is None:
+            self._codec = detect_codec(unit)
+        if self._codec == "hevc":
+            kind = (unit[len(ANNEX_B_START)] >> 1) & 0x3F
+            if kind == 32:
+                self._vps = unit
+            elif kind == 33:
+                self._sps = unit
+            elif kind == 34:
+                self._pps = unit
+            elif kind in (19, 20, 21):
+                self._keyframe = unit
+            return
         kind = unit[len(ANNEX_B_START)] & 0x1F
         if kind == 7:
             self._sps = unit
@@ -215,7 +313,9 @@ class NativeStreamSession:
 
         if not self._sps or not self._pps:
             return b""
-        preamble = self._sps + self._pps + self._keyframe
+        if self._codec == "hevc" and not self._vps:
+            return b""
+        preamble = self._vps + self._sps + self._pps + self._keyframe
         return preamble if len(preamble) <= MAX_PREAMBLE_BYTES else b""
 
     def status(self) -> SessionStatus:
@@ -244,13 +344,19 @@ class NativeStreamSession:
         self._media_ready = False
         # A new helper means a new encoder state, so cached units are stale.
         self._scan.clear()
-        self._sps = self._pps = self._keyframe = b""
+        self._sps = self._pps = self._vps = self._keyframe = b""
+        self._codec = None
         process = self._starter()
         if process.stdout is None or process.stderr is None:
             process.kill()
             process.wait(timeout=5)
             raise P2PError("native stream helper pipes are unavailable")
         self._process = process
+        watchdog = threading.Timer(
+            self.media_timeout, self._stop_without_media, args=(process,)
+        )
+        watchdog.daemon = True
+        watchdog.start()
         stderr_thread = threading.Thread(
             target=self._drain_stderr, args=(process,), daemon=True
         )
@@ -323,8 +429,35 @@ class NativeStreamSession:
                 break
         if payload is not None and isinstance(payload.get("disconnected"), bool):
             self._clean_disconnect = payload["disconnected"]
-        if returncode != 0:
+        if returncode != 0 and self._last_error is None:
             self._last_error = "native_stream_ended"
+        if self._log is not None:
+            self._log(self._summary_line(payload, returncode))
+
+    def _summary_line(self, payload: dict[str, object] | None, returncode: int) -> str:
+        parts = [
+            "stream_ended",
+            f"camera={self._name or '-'}",
+            f"returncode={returncode}",
+            f"media_ready={str(self._media_ready).lower()}",
+            f"error={self._last_error or 'none'}",
+        ]
+        for key in SUMMARY_LOG_FIELDS:
+            value = payload.get(key) if payload is not None else None
+            if isinstance(value, bool):
+                parts.append(f"{key}={str(value).lower()}")
+            elif isinstance(value, int):
+                parts.append(f"{key}={value}")
+            else:
+                parts.append(f"{key}=-")
+        return " ".join(parts)
+
+    def _stop_without_media(self, process: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            if self._process is not process or self._media_ready:
+                return
+            self._last_error = "no_media_timeout"
+        self._terminate(process)
 
     def _stop_if_idle(self) -> None:
         with self._lock:

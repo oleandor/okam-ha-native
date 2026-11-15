@@ -12,7 +12,7 @@ def test_native_bridge_is_a_prebuilt_64_bit_ha_app() -> None:
     assert "boot: auto" in config
     assert "stage: experimental" not in config
     assert "machine:" not in config
-    assert "version: 1.2.1" in config
+    assert "version: 1.3.0" in config
     assert "idle_timeout_seconds: 120" in config
     assert "account_username: email" in config
     assert "account_password: password" in config
@@ -75,7 +75,7 @@ def test_repository_contains_camera_integration_for_native_api() -> None:
     manifest = (component / "manifest.json").read_text(encoding="utf-8")
     config_flow = (component / "config_flow.py").read_text(encoding="utf-8")
     camera = (component / "camera.py").read_text(encoding="utf-8")
-    assert '"version": "1.2.1"' in manifest
+    assert '"version": "1.3.0"' in manifest
     assert "http://homeassistant.local:8099" in config_flow
     assert "CameraEntityFeature.STREAM" in camera
     assert "_attr_has_entity_name = False" in camera
@@ -154,6 +154,20 @@ def test_image_ffmpeg_can_mux_the_live_stream() -> None:
     assert "--enable-demuxer=h264" in dockerfile
 
 
+def test_image_ffmpeg_passes_h265_through_without_gpl_components() -> None:
+    # H.265 cameras are muxed and snapshotted, never re-encoded: the HEVC
+    # demuxer, parser and decoder are LGPL and add no CPU cost for H.264
+    # cameras. A libx264 re-encode would make the shipped binary GPL and is
+    # deliberately left out.
+    dockerfile = (ROOT / "okam_native_app" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "--enable-demuxer=hevc" in dockerfile
+    assert "--enable-parser=hevc" in dockerfile
+    assert "--enable-decoder=hevc" in dockerfile
+    assert "--enable-gpl" not in dockerfile
+    assert "libx264" not in dockerfile
+
+
 def test_latest_tag_only_ever_follows_main() -> None:
     # A test build published from a branch must not repoint the tag that
     # installations track.
@@ -215,6 +229,20 @@ def test_addon_changelog_matches_the_repository_changelog() -> None:
     packaged = (ROOT / "okam_native_app" / "CHANGELOG.md").read_text(encoding="utf-8")
 
     assert packaged == root
+
+
+def test_pc_client_live_start_is_opt_in_in_schema_and_helper() -> None:
+    config = (ROOT / "okam_native_app" / "config.yaml").read_text(encoding="utf-8")
+    assert "  pc_client_live_start: false\n" in config
+    helper = (ROOT / "native" / "hybris_connect" / "hybris_connect.c").read_text(
+        encoding="utf-8"
+    )
+    # The extra commands are only reachable through the gated helper, and the
+    # gate is only opened by the optional fourth stdin field.
+    assert helper.count("send_cgi(write_cgi, client, PRE_LIVE_COMMAND)") == 1
+    assert helper.count("send_cgi(write_cgi, client, ACTIVE_TIME_COMMAND)") == 1
+    assert "if (!pc_client_live_start) return;" in helper
+    assert "pc_client_live_start = account_user_id != NULL;" in helper
 
 
 def test_release_creation_is_automated_and_guarded() -> None:
