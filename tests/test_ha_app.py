@@ -263,3 +263,20 @@ def test_integration_exposes_camera_controls_only_when_supported() -> None:
     # polls the camera on its own.
     assert 'self.coordinator.data.get("controls")' in controls
     assert '/controls"' in api
+
+
+def test_release_creation_is_automated_and_guarded() -> None:
+    # Releases were created by hand, so a merge published the image without a
+    # release entry. The step reuses the latest-tag guard, so a test build
+    # published from a branch cannot create one.
+    workflow = (ROOT / ".github" / "workflows" / "publish-image.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Create the GitHub release" in workflow
+    assert "if: needs.prepare.outputs.move_latest == 'true'" in workflow
+    assert "gh release create" in workflow
+    # Idempotent, so re-running a publish cannot fail on an existing release.
+    assert 'gh release view "v$VERSION"' in workflow
+    # Creating a release needs write access the workflow does not grant by default.
+    assert "contents: write" in workflow
