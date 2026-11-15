@@ -21,6 +21,8 @@ that account in the O-KAM app once and confirm that live view works.
 | `camera_id` | Home Assistant camera alias when the account has one camera, for example `cabin` |
 | `cameras` | Optional list choosing which cameras to expose and their aliases (see below) |
 | `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `120` is recommended |
+| `probe_camera` | Optional diagnostic: camera alias to probe for video channels at startup; normally leave blank |
+| `pc_client_live_start` | Compatibility mode for cameras that connect but send no video; normally leave disabled |
 
 The API token is not an O-KAM credential. Create a new random value and enter
 the identical value when adding the Home Assistant integration.
@@ -44,12 +46,15 @@ aliases, using each name exactly as the O-KAM app shows it:
 
 ```yaml
 cameras:
-  - name: หน้าบ้าน 3
-    camera_id: front3
-  - name: ห้องครัว
+  - name: Front door
+    camera_id: front
+  - name: Kitchen
     camera_id: kitchen
     password: YOUR_CAMERA_PASSWORD
 ```
+
+An account with one camera and no `cameras` list behaves exactly as before:
+the camera keeps the `camera_id` alias and its existing Home Assistant entity.
 
 `password` is optional. Add it only for a camera whose live view fails with
 `login_result=-1` in the log, which means the camera rejected its password.
@@ -62,13 +67,14 @@ simultaneous streams use more CPU and network than one.
 Every live session ends with one log line such as:
 
 ```text
-stream_ended camera=front3 returncode=0 media_ready=true error=none connected=true connect_state=3 ... login_result=0 authenticated=true ... h264_frames=812 h265_frames=0 ...
+stream_ended camera=front returncode=0 media_ready=true error=none connected=true connect_state=3 ... login_result=0 authenticated=true ... h264_frames=812 h265_frames=0 ...
 ```
 
 `login_result=-1` means the camera refused its password. `h265_frames` above
-zero with `h264_frames=0` means the camera sends H.265, which the bridge forwards
-as is (playback then depends on the browser's H.265 support). `error=no_media_timeout` means no video arrived within 90
-seconds and the session was stopped.
+zero with `h264_frames=0` means the camera sends H.265. The bridge forwards it
+without re-encoding, so playback depends on the browser's H.265 support.
+`error=no_media_timeout` means no video arrived within 90 seconds and the
+session was stopped.
 
 ## Diagnosing a camera with no video
 
@@ -77,6 +83,25 @@ one `channel_probe` line per live substream, for example
 `channel_probe camera=side substream=2 start_sent=true ch1=812345b/magic=a815aa55/type=16`.
 `channels=none` means the camera sent nothing for that substream. Clear the
 option again afterwards; the probe takes about half a minute at every start.
+
+### PC-client live start
+
+Some cameras, notably multi-lens and newer account-bound models, authenticate
+but send no video to the bridge's normal live start. Enabling
+`pc_client_live_start` makes the bridge start live view the way the official
+O-KAM PC client does: two preparation commands before the live request, the
+account user id on each command, and the account's virtual device id.
+
+It is disabled by default, and should stay disabled for any camera whose live
+view already works. To enable it for one camera only, set it on that camera's
+`cameras` entry instead:
+
+```yaml
+cameras:
+  - name: Garden 4-lens
+    camera_id: garden
+    pc_client_live_start: true
+```
 
 ## Starting the app
 
