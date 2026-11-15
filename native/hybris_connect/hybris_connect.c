@@ -44,6 +44,7 @@ typedef void *(*client_create_fn)(const char *, const char *);
 typedef int (*client_connect_fn)(void *, int, const char *, int);
 typedef bool (*client_login_fn)(void *, const char *, const char *);
 typedef bool (*client_write_cgi_fn)(void *, const char *, int);
+typedef int (*client_setvuid_fn)(void *, const char *);
 typedef int (*client_read_fn)(void *, int, void *, int, int, int *);
 typedef bool (*client_disconnect_fn)(void *);
 typedef void (*client_destroy_fn)(void *);
@@ -298,6 +299,102 @@ static bool write_stdout(const unsigned char *payload, size_t size) {
     return true;
 }
 
+/* Sent by the official O-KAM Pro PC client right before livestream.cgi. It is
+ * a board/capability query that some multi-sensor cameras are believed to
+ * need before they send video. Its reply is ignored. Opt-in, see below. */
+#define PRE_LIVE_COMMAND "trans_cmd_string.cgi?cmd=8000&command=0&"
+/* Keep-alive the PC client sends to every camera every few seconds. */
+#define ACTIVE_TIME_COMMAND "trans_cmd_string.cgi?cmd=2131&command=1&DevActiveTime=10&"
+
+/* `userId=<account id>&`, appended to every command like the official PC
+ * client does. Empty when no account id was supplied. */
+static char user_id_suffix[48];
+
+/* The PC-client live start (keep-alive + pre-live query before livestream.cgi,
+ * userId on commands, VUID registration) is opt-in. The bridge only sends the
+ * optional fourth stdin field when the user enabled it; without that field the
+ * helper sends exactly the original single livestream.cgi command. */
+static bool pc_client_live_start = false;
+
+static void set_account_user_id(const char *user_id) {
+    user_id_suffix[0] = 0;
+    if (user_id == NULL) return;
+    size_t size = strlen(user_id);
+    if (size == 0 || size > 20) return;
+    for (size_t i = 0; i < size; ++i) {
+        if (user_id[i] < '0' || user_id[i] > '9') return;
+    }
+    snprintf(user_id_suffix, sizeof(user_id_suffix), "userId=%s&", user_id);
+}
+
+static bool send_cgi(client_write_cgi_fn write_cgi, void *client, const char *command) {
+    if (user_id_suffix[0] == 0) return write_cgi(client, command, 5000);
+    char full[256];
+    int written = snprintf(full, sizeof(full), "%s%s", command, user_id_suffix);
+    if (written < 0 || (size_t)written >= sizeof(full)) return write_cgi(client, command, 5000);
+    bool ok = write_cgi(client, full, 5000);
+    memset(full, 0, sizeof(full));
+    return ok;
+}
+
+static void send_pre_live_commands(client_write_cgi_fn write_cgi, void *client) {
+    if (!pc_client_live_start) return;
+    send_cgi(write_cgi, client, ACTIVE_TIME_COMMAND);
+    send_cgi(write_cgi, client, PRE_LIVE_COMMAND);
+}
+
+#define RAW_CHUNK_BYTES (64U * 1024U)
+
+static bool starts_with_annex_b(const unsigned char *data) {
+    return (data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1) ||
+           (data[0] == 0 && data[1] == 0 && data[2] == 1);
+}
+
+/* Some cameras (seen on a multi-sensor model) send a bare Annex-B elementary
+ * stream on the video channel, without the 32-byte frame header. Forward it
+ * unchanged; the bridge identifies the codec itself. */
+static bool forward_raw_stream(client_read_fn client_read, void *client,
+                               const unsigned char *first, size_t first_size,
+                               unsigned int *frames, unsigned long long *bytes,
+                               unsigned int *end_reason) {
+    if (!write_stdout(first, first_size)) {
+        *end_reason = STREAM_END_OUTPUT_CLOSED;
+        return true;
+    }
+    *bytes += first_size;
+    (*frames)++;
+    unsigned char *chunk = malloc(RAW_CHUNK_BYTES);
+    if (chunk == NULL) {
+        *end_reason = STREAM_END_NO_MEMORY;
+        return true;
+    }
+    time_t deadline = time(NULL) + STREAM_TIMEOUT_SECONDS;
+    while (stream_running) {
+        int received = 0;
+        int result = client_read(client, VIDEO_CHANNEL, chunk, (int)RAW_CHUNK_BYTES,
+                                 READ_TIMEOUT_MS, &received);
+        if (received > 0 && (size_t)received <= RAW_CHUNK_BYTES) {
+            deadline = time(NULL) + STREAM_TIMEOUT_SECONDS;
+            *bytes += (unsigned long long)received;
+            if (received >= 4 && starts_with_annex_b(chunk)) (*frames)++;
+            bool ok = write_stdout(chunk, (size_t)received);
+            memset(chunk, 0, (size_t)received);
+            if (!ok) {
+                *end_reason = STREAM_END_OUTPUT_CLOSED;
+                stream_running = 0;
+                break;
+            }
+            continue;
+        }
+        if ((result != -3 && result < 0) || time(NULL) > deadline) {
+            *end_reason = STREAM_END_HEADER_READ;
+            break;
+        }
+    }
+    free(chunk);
+    return true;
+}
+
 static bool is_h265_frame(const unsigned char *header) {
     return header[4] == 0x10U || header[4] == 0x11U;
 }
@@ -323,6 +420,10 @@ static bool forward_video_frames(client_read_fn client_read, void *client,
         *last_magic = read_le32(header);
         *last_frame_type = header[4];
         if (*last_magic != 0xa815aa55U) {
+            if (*frames == 0 && *h265_frames == 0 && starts_with_annex_b(header)) {
+                return forward_raw_stream(client_read, client, header, sizeof(header),
+                                          frames, bytes, end_reason);
+            }
             *end_reason = STREAM_END_BAD_MAGIC;
             return false;
         }
@@ -454,7 +555,7 @@ static void probe_status(client_read_fn client_read, client_write_cgi_fn client_
                          void *client, status_probe_result *status) {
     unsigned char *payload = malloc(MAX_COMMAND_BYTES);
     if (payload == NULL) return;
-    status->requested = client_write_cgi(client, "get_status.cgi?", 5000);
+    status->requested = send_cgi(client_write_cgi, client, "get_status.cgi?");
     time_t deadline = time(NULL) + PROBE_SECONDS;
     while (status->requested && time(NULL) < deadline) {
         unsigned int command = 0;
@@ -511,15 +612,17 @@ static void probe_live_channels(client_read_fn client_read, client_write_cgi_fn 
                                 void *client, channel_probe_result *results) {
     unsigned char *buffer = malloc(PROBE_BUFFER_BYTES);
     if (buffer == NULL) return;
+    send_pre_live_commands(client_write_cgi, client);
+    drain_channels(client_read, client, buffer, 1, NULL);
     for (size_t index = 0; index < PROBE_SUBSTREAM_COUNT; ++index) {
         char command[96];
         snprintf(command, sizeof(command), "livestream.cgi?streamid=10&substream=%d&",
                  probe_substreams[index]);
-        results[index].start_sent = client_write_cgi(client, command, 5000);
+        results[index].start_sent = send_cgi(client_write_cgi, client, command);
         if (results[index].start_sent) {
             drain_channels(client_read, client, buffer, PROBE_SECONDS, &results[index]);
         }
-        client_write_cgi(client, "livestream.cgi?streamid=16&substream=0&", 5000);
+        send_cgi(client_write_cgi, client, "livestream.cgi?streamid=16&substream=0&");
         drain_channels(client_read, client, buffer, 1, NULL);
     }
     free(buffer);
@@ -619,6 +722,16 @@ int main(int argc, char **argv) {
     char *uid = read_field();
     char *service_parameter = read_field();
     char *device_password = authenticate ? read_field() : NULL;
+    /* Optional fourth field: the account's numeric user id. */
+    char *account_user_id = authenticate && device_password != NULL ? read_field() : NULL;
+    pc_client_live_start = account_user_id != NULL;
+    set_account_user_id(account_user_id);
+    /* Optional fifth field: the virtual device id (VUID) the account lists for
+     * this camera when the transport id differs. The official app registers it
+     * on the client right after client_create; VUID cameras answer commands
+     * without it but send no video. */
+    char *virtual_uid = account_user_id != NULL ? read_field() : NULL;
+    free(account_user_id);
     if (uid == NULL || service_parameter == NULL ||
         (authenticate && device_password == NULL) || !initialize_stack_guard()) {
         free(uid);
@@ -683,6 +796,16 @@ int main(int argc, char **argv) {
     void *client = client_create(uid, NULL);
     memset(uid, 0, strlen(uid));
     free(uid);
+    if (client != NULL && virtual_uid != NULL) {
+        client_setvuid_fn client_setvuid =
+            (client_setvuid_fn)android_dlsym(library, "client_setvuid");
+        if (client_setvuid != NULL) client_setvuid(client, virtual_uid);
+    }
+    if (virtual_uid != NULL) {
+        memset(virtual_uid, 0, strlen(virtual_uid));
+        free(virtual_uid);
+        virtual_uid = NULL;
+    }
     int state = -1;
     bool connected = false;
     bool disconnected = false;
@@ -728,8 +851,9 @@ int main(int argc, char **argv) {
             }
         }
         if (connected && authenticated && live_mode) {
-            stream_start_sent = client_write_cgi(
-                client, "livestream.cgi?streamid=10&substream=2&", 5000);
+            send_pre_live_commands(client_write_cgi, client);
+            stream_start_sent = send_cgi(client_write_cgi, client,
+                                         "livestream.cgi?streamid=10&substream=2&");
             if (stream_start_sent) {
                 if (stream_stdout) {
                     signal(SIGPIPE, SIG_IGN);

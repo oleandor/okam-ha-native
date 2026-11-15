@@ -104,6 +104,24 @@ def resolve_client_id(uid: str, *, opener: OpenRequest = _open_request) -> str:
     return client_id
 
 
+def _optional_user_id(account_user_id: str, virtual_uid: str = "") -> bytes:
+    """Optional helper fields 4 and 5: account user id, then virtual device id.
+
+    Field 4 is the numeric account user id ("-" when unknown but field 5 is
+    needed); field 5 is the account's virtual id (VUID), sent only when the
+    transport id was resolved from it.
+    """
+
+    user_id = (
+        account_user_id
+        if account_user_id and account_user_id.isdigit() and len(account_user_id) <= 20
+        else ""
+    )
+    if virtual_uid and 4 <= len(virtual_uid) <= 256:
+        return _field(user_id or "-") + _field(virtual_uid)
+    return _field(user_id) if user_id else b""
+
+
 def _field(value: str) -> bytes:
     encoded = value.encode("utf-8")
     if not encoded or len(encoded) > MAX_FIELD_BYTES or any(byte < 0x20 for byte in encoded):
@@ -395,10 +413,13 @@ def run_channel_probe(
     *,
     environment: dict[str, str],
     timeout: float = 240.0,
+    account_user_id: str = "",
+    virtual_uid: str = "",
 ) -> dict[str, object]:
     """Ask the helper which P2P channels carry data for each live substream."""
 
     stdin = _field(uid) + _field(service_parameter) + _field(device_password)
+    stdin += _optional_user_id(account_user_id, virtual_uid)
     try:
         completed = subprocess.run(
             [helper, library, "--channel-probe"],
@@ -705,10 +726,13 @@ def open_stream_process(
     device_password: str,
     *,
     environment: dict[str, str],
+    account_user_id: str = "",
+    virtual_uid: str = "",
 ) -> subprocess.Popen[bytes]:
     """Start the graceful raw-H.264 helper with all sensitive input on stdin."""
 
     stdin = _field(uid) + _field(service_parameter) + _field(device_password)
+    stdin += _optional_user_id(account_user_id, virtual_uid)
     try:
         process = subprocess.Popen(
             [helper, library, "--stream-stdout"],

@@ -256,6 +256,35 @@ def configured_camera_password(alias: str, options: dict[str, object]) -> object
     return options.get("camera_password")
 
 
+def pc_client_live_start(alias: str, options: dict[str, object]) -> bool:
+    """Whether to start live view the way the official PC client does.
+
+    Off by default, so cameras get the original single livestream command. A
+    ``pc_client_live_start`` on the matching ``cameras`` entry wins over the
+    app-wide option of the same name.
+    """
+
+    for item in options.get("cameras") or []:
+        if isinstance(item, dict) and item.get("camera_id") == alias:
+            value = item.get("pc_client_live_start")
+            if isinstance(value, bool):
+                return value
+    return options.get("pc_client_live_start") is True
+
+
+def pc_client_fields(
+    alias: str, device: AccountDevice, client_id: str, options: dict[str, object]
+) -> dict[str, str]:
+    """Optional helper fields for the PC-client live start, empty when off."""
+
+    if not pc_client_live_start(alias, options):
+        return {}
+    return {
+        "account_user_id": device.account_user_id,
+        "virtual_uid": device.uid if client_id != device.uid else "",
+    }
+
+
 def enumerate_account() -> list[tuple[str, AccountDevice]]:
     options = load_options()
     username = options.get("account_username")
@@ -542,6 +571,7 @@ def _build_bridge(
             service_parameter,
             camera_password,
             environment=p2p_environment(),
+            **pc_client_fields(alias, device, client_id, options),
         )
 
     session = NativeStreamSession(
@@ -581,6 +611,7 @@ def run_requested_channel_probe(cameras: list[tuple[str, AccountDevice]]) -> Non
                 get_service_parameter(client_id),
                 password,
                 environment=p2p_environment(),
+                **pc_client_fields(alias, device, client_id, options),
             )
         except P2PError:
             print(f"channel_probe camera={alias} failed=true", flush=True)

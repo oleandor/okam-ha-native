@@ -229,3 +229,17 @@ def test_addon_changelog_matches_the_repository_changelog() -> None:
     packaged = (ROOT / "okam_native_app" / "CHANGELOG.md").read_text(encoding="utf-8")
 
     assert packaged == root
+
+
+def test_pc_client_live_start_is_opt_in_in_schema_and_helper() -> None:
+    config = (ROOT / "okam_native_app" / "config.yaml").read_text(encoding="utf-8")
+    assert "  pc_client_live_start: false\n" in config
+    helper = (ROOT / "native" / "hybris_connect" / "hybris_connect.c").read_text(
+        encoding="utf-8"
+    )
+    # The extra commands are only reachable through the gated helper, and the
+    # gate is only opened by the optional fourth stdin field.
+    assert helper.count("send_cgi(write_cgi, client, PRE_LIVE_COMMAND)") == 1
+    assert helper.count("send_cgi(write_cgi, client, ACTIVE_TIME_COMMAND)") == 1
+    assert "if (!pc_client_live_start) return;" in helper
+    assert "pc_client_live_start = account_user_id != NULL;" in helper

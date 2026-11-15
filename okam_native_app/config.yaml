@@ -25,6 +25,7 @@ options:
   run_auth_test: false
   run_stream_test: false
   run_snapshot_test: false
+  pc_client_live_start: false
 schema:
   account_username: email
   account_password: password
@@ -35,9 +36,11 @@ schema:
     - name: str
       camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
       password: password?
+      pc_client_live_start: bool?
   idle_timeout_seconds: "int(10,600)"
   run_connect_test: bool
   run_auth_test: bool
   run_stream_test: bool
   run_snapshot_test: bool
   probe_camera: str?
+  pc_client_live_start: bool

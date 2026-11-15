@@ -32,5 +32,8 @@ configuration:
   probe_camera:
     name: Channel probe camera
     description: Optional camera alias. At startup, try each live substream on that camera and log which P2P channels carry video. For diagnosing cameras that send no video, such as multi-lens models. Leave empty for normal use.
+  pc_client_live_start:
+    name: PC-client live start (compatibility)
+    description: Start live view like the official O-KAM PC client, with extra preparation commands, the account user id and the virtual device id. Only for cameras that connect but send no video, such as some multi-lens models. Leave disabled when live view works. A cameras entry can set it per camera.
 network:
   8099/tcp: Local bridge API used by the Home Assistant integration

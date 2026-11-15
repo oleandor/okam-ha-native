@@ -208,3 +208,74 @@ def test_cameras_option_schema_accepts_an_optional_password() -> None:
     cameras = schema.split("  cameras:", 1)[1].split("\n  idle_timeout_seconds", 1)[0]
     assert '      camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"' in cameras
     assert "      password: password?" in cameras
+
+
+def test_pc_client_live_start_is_off_by_default() -> None:
+    # A camera that works today must get the original helper input: no
+    # account user id, no virtual id, and so no extra live-start commands.
+    app = load_entrypoint()
+    camera = AccountDevice(
+        uid="VIRT1234567X", name="Cabin", device_password="pw", account_user_id="42"
+    )
+
+    assert app.pc_client_fields("cabin", camera, "REAL-ID", {}) == {}
+    assert app.pc_client_fields(
+        "cabin", camera, "REAL-ID", {"pc_client_live_start": False}
+    ) == {}
+
+
+def test_pc_client_live_start_can_be_enabled_globally_or_per_camera() -> None:
+    app = load_entrypoint()
+    camera = AccountDevice(
+        uid="VIRT1234567X", name="Cabin", device_password="pw", account_user_id="42"
+    )
+    enabled = {"account_user_id": "42", "virtual_uid": "VIRT1234567X"}
+
+    assert app.pc_client_fields(
+        "cabin", camera, "REAL-ID", {"pc_client_live_start": True}
+    ) == enabled
+    # A camera whose transport id is its own id has no virtual id to register.
+    assert app.pc_client_fields(
+        "cabin", camera, "VIRT1234567X", {"pc_client_live_start": True}
+    ) == {"account_user_id": "42", "virtual_uid": ""}
+    per_camera = {
+        "pc_client_live_start": False,
+        "cameras": [
+            {"name": "Cabin", "camera_id": "cabin", "pc_client_live_start": True},
+            {"name": "Yard", "camera_id": "yard"},
+        ],
+    }
+    assert app.pc_client_fields("cabin", camera, "REAL-ID", per_camera) == enabled
+    assert app.pc_client_fields("yard", camera, "REAL-ID", per_camera) == {}
+    opted_out = {
+        "pc_client_live_start": True,
+        "cameras": [{"name": "Cabin", "camera_id": "cabin", "pc_client_live_start": False}],
+    }
+    assert app.pc_client_fields("cabin", camera, "REAL-ID", opted_out) == {}
+
+
+def test_helper_stdin_is_unchanged_when_pc_client_live_start_is_off(monkeypatch) -> None:
+    import subprocess
+
+    from okam_native import p2p
+
+    written: list[bytes] = []
+
+    class FakeStdin:
+        def write(self, data: bytes) -> None:
+            written.append(data)
+
+        def close(self) -> None:
+            pass
+
+    class FakeProcess:
+        stdin = FakeStdin()
+        stdout = object()
+        stderr = object()
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    p2p.open_stream_process(
+        "helper", "lib", "REAL-ID", "service", "pw", environment={}
+    )
+    expected = p2p._field("REAL-ID") + p2p._field("service") + p2p._field("pw")
+    assert written == [expected]
