@@ -147,3 +147,88 @@ def test_no_preamble_is_sent_before_parameter_sets_are_seen() -> None:
     session._note_media(_unit(1, b"inter") + _unit(1, b"more"))
 
     assert session._preamble() == b""
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_helper_without_media_is_stopped_and_releases_viewers() -> None:
+    # A camera that never sends H.264 used to keep its helper and every
+    # waiting viewer alive forever, so viewers piled up with nobody watching.
+    process = FakeProcess()
+    session = NativeStreamSession(
+        lambda: process, idle_timeout=60, media_timeout=0.05  # type: ignore[arg-type]
+    )
+    viewer = session.acquire()
+    received = []
+    reader = threading.Thread(target=lambda: received.extend(viewer), daemon=True)
+    reader.start()
+
+    assert _wait_until(lambda: process.poll() is not None)
+    reader.join(timeout=2)
+    assert not reader.is_alive()
+    assert received == []
+    assert _wait_until(lambda: session.status().last_error == "no_media_timeout")
+    viewer.close()
+    assert session.status().viewers == 0
+
+
+def test_media_before_the_deadline_keeps_the_helper_running() -> None:
+    process = FakeProcess()
+    session = NativeStreamSession(
+        lambda: process, idle_timeout=60, media_timeout=0.2  # type: ignore[arg-type]
+    )
+    viewer = session.acquire()
+    process.stdout.chunks.put(b"\x00\x00\x00\x01h264")
+    assert _wait_until(lambda: session.status().media_ready)
+    time.sleep(0.3)
+    assert process.poll() is None
+    assert session.status().last_error is None
+    viewer.close()
+    session.close()
+
+
+class SummaryProcess(FakeProcess):
+    """A helper whose final stderr line is a full native summary."""
+
+    def __init__(self, summary: bytes) -> None:
+        super().__init__()
+        self._summary = summary
+
+    def terminate(self) -> None:
+        self.returncode = 0
+        self.stderr.chunks.put(self._summary)
+        self.stderr.chunks.put(None)
+        self.stdout.chunks.put(None)
+        self._done.set()
+
+
+def test_stream_end_logs_a_sanitized_per_camera_summary() -> None:
+    lines: list[str] = []
+    process = SummaryProcess(
+        b'{"connected":true,"connect_state":3,"login_result":0,'
+        b'"authenticated":true,"h264_frames":0,"h265_frames":7,'
+        b'"uid":"SECRET-UID","password":"hunter2","disconnected":true}\n'
+    )
+    session = NativeStreamSession(
+        lambda: process,  # type: ignore[arg-type]
+        idle_timeout=60,
+        media_timeout=0.05,
+        name="side",
+        log=lines.append,
+    )
+    viewer = session.acquire()
+    assert _wait_until(lambda: bool(lines))
+    viewer.close()
+
+    line = lines[0]
+    assert line.startswith("stream_ended camera=side ")
+    assert "error=no_media_timeout" in line
+    assert "h265_frames=7" in line
+    assert "login_result=0" in line
+    assert "authenticated=true" in line
+    assert "SECRET-UID" not in line and "hunter2" not in line

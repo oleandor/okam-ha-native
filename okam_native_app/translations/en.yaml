@@ -13,7 +13,7 @@ configuration:
     description: Local Home Assistant name for the camera when the account has only one camera, for example cabin.
   cameras:
     name: Cameras
-    description: Optional. One entry per camera to expose, with name exactly as shown in the O-KAM app and a local camera_id alias. Leave empty to expose every camera in the account.
+    description: Optional. One entry per camera to expose, with name exactly as shown in the O-KAM app a local camera_id alias, and an optional password when that camera's local password differs from the others. Leave empty to expose every camera in the account.
   idle_timeout_seconds:
     name: Idle disconnect delay
     description: Seconds to wait after the final viewer closes before stopping and disconnecting the camera.

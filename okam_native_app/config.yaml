@@ -34,6 +34,7 @@ schema:
   cameras:
     - name: str
       camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
+      password: password?
   idle_timeout_seconds: "int(10,600)"
   run_connect_test: bool
   run_auth_test: bool

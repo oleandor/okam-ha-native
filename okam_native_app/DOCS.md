@@ -48,12 +48,27 @@ cameras:
     camera_id: front3
   - name: ห้องครัว
     camera_id: kitchen
+    password: YOUR_CAMERA_PASSWORD
 ```
+
+`password` is optional. Add it only for a camera whose live view fails with
+`login_result=-1` in the log, which means the camera rejected its password.
 
 The startup log prints the aliases in use. Add the Home Assistant integration
 once per camera, with the same bridge URL and API token and that camera's
 alias. Each open live view keeps its own camera connection, so several
 simultaneous streams use more CPU and network than one.
+
+Every live session ends with one log line such as:
+
+```text
+stream_ended camera=front3 returncode=0 media_ready=true error=none connected=true connect_state=3 ... login_result=0 authenticated=true ... h264_frames=812 h265_frames=0 ...
+```
+
+`login_result=-1` means the camera refused its password. `h265_frames` above
+zero with `h264_frames=0` means the camera sends H.265, which the bridge does
+not forward yet. `error=no_media_timeout` means no video arrived within 90
+seconds and the session was stopped.
 
 ## Starting the app
 

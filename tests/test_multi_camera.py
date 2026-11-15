@@ -183,3 +183,28 @@ def test_status_aggregates_every_camera() -> None:
     finally:
         with app.LOCK:
             app.BRIDGES.clear()
+
+
+def test_per_camera_password_overrides_the_app_wide_one() -> None:
+    module = load_entrypoint()
+    options = {
+        "camera_password": "app-wide",
+        "cameras": [
+            {"name": "Front", "camera_id": "front", "password": "front-only"},
+            {"name": "Back", "camera_id": "back"},
+            {"name": "Side", "camera_id": "side", "password": ""},
+        ],
+    }
+    assert module.configured_camera_password("front", options) == "front-only"
+    assert module.configured_camera_password("back", options) == "app-wide"
+    assert module.configured_camera_password("side", options) == "app-wide"
+    assert module.configured_camera_password("unknown", options) == "app-wide"
+    assert module.configured_camera_password("back", {"cameras": []}) is None
+
+
+def test_cameras_option_schema_accepts_an_optional_password() -> None:
+    config = (ROOT / "okam_native_app" / "config.yaml").read_text(encoding="utf-8")
+    schema = config.split("\nschema:", 1)[1]
+    cameras = schema.split("  cameras:", 1)[1].split("\n  idle_timeout_seconds", 1)[0]
+    assert '      camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"' in cameras
+    assert "      password: password?" in cameras

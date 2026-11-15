@@ -238,6 +238,22 @@ def select_cameras(
     return selected
 
 
+def configured_camera_password(alias: str, options: dict[str, object]) -> object:
+    """The camera login override for one alias.
+
+    A ``password`` on the matching ``cameras`` entry wins over the app-wide
+    ``camera_password``, because cameras on one account can have different
+    passwords and a single override would break the others.
+    """
+
+    for item in options.get("cameras") or []:
+        if isinstance(item, dict) and item.get("camera_id") == alias:
+            password = item.get("password")
+            if password not in (None, ""):
+                return password
+    return options.get("camera_password")
+
+
 def enumerate_account() -> list[tuple[str, AccountDevice]]:
     options = load_options()
     username = options.get("account_username")
@@ -282,7 +298,7 @@ def p2p_environment() -> dict[str, str]:
     return environment
 
 
-def run_p2p_acceptance(device: AccountDevice) -> None:
+def run_p2p_acceptance(device: AccountDevice, alias: str = "") -> None:
     options = load_options()
     enabled = options.get("run_connect_test") is True
     auth_enabled = options.get("run_auth_test") is True
@@ -299,7 +315,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
     if not enabled and not auth_enabled and not stream_enabled:
         return
     camera_password = select_camera_password(
-        device.device_password, options.get("camera_password")
+        device.device_password, configured_camera_password(alias, options)
     )
     credentials = load_wake_credentials(VENDOR / "device_wakeup_server.dart")
     if credentials is None:
@@ -371,7 +387,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 set_status(p2p_ready=True, camera_authenticated=True)
             if not (result.connected and result.authenticated and result.disconnected):
                 print(
-                    "camera_authentication=false "
+                    f"camera={alias} camera_authentication=false "
                     f"connect_state={result.connect_state} "
                     f"login_sent={str(result.login_sent).lower()} "
                     f"login_response_received={str(result.login_response_received).lower()} "
@@ -401,7 +417,7 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                     connect_attempt=attempt,
                 )
                 print(
-                    f"snapshot_created=true width={result.width} "
+                    f"camera={alias} snapshot_created=true width={result.width} "
                     f"height={result.height} bytes={len(result.jpeg)} "
                     "clean_disconnect=true",
                     flush=True,
@@ -414,13 +430,13 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                     connect_attempt=attempt,
                 )
                 print(
-                    f"h264_received=true frames={result.h264_frames} "
+                    f"camera={alias} h264_received=true frames={result.h264_frames} "
                     f"bytes={result.h264_bytes} clean_disconnect=true",
                     flush=True,
                 )
                 return
             print(
-                "h264_received=false "
+                f"camera={alias} h264_received=false "
                 f"stream_start_sent={str(result.stream_start_sent).lower()} "
                 f"stream_stop_sent={str(result.stream_stop_sent).lower()} "
                 f"frames={result.h264_frames} bytes={result.h264_bytes} "
@@ -439,11 +455,11 @@ def run_p2p_acceptance(device: AccountDevice) -> None:
                 login_command=result.login_command,
                 login_result=result.login_result,
             )
-            print("camera_authenticated=true clean_disconnect=true", flush=True)
+            print(f"camera={alias} camera_authenticated=true clean_disconnect=true", flush=True)
             return
         if not auth_enabled and result.connected and result.disconnected:
             set_status(p2p_ready=True, phase="p2p_connected", connect_attempt=attempt)
-            print("p2p_connected=true clean_disconnect=true", flush=True)
+            print(f"camera={alias} p2p_connected=true clean_disconnect=true", flush=True)
             return
         if attempt < 3:
             time.sleep(5)
@@ -494,7 +510,7 @@ def _build_bridge(
     credentials: object,
 ) -> CameraBridge:
     camera_password = select_camera_password(
-        device.device_password, options.get("camera_password")
+        device.device_password, configured_camera_password(alias, options)
     )
     client_id = resolve_client_id(device.uid)
     service_parameter = get_service_parameter(client_id)
@@ -508,8 +524,15 @@ def _build_bridge(
                 wake_responsive_servers=wake.responsive_servers,
                 phase="starting_native_stream",
             )
+            print(
+                f"stream_starting camera={alias} wake_requested="
+                f"{str(wake.requested).lower()} "
+                f"wake_responsive_servers={wake.responsive_servers}",
+                flush=True,
+            )
         except WakeError:
             set_status(phase="starting_native_stream")
+            print(f"stream_starting camera={alias} wake_requested=false", flush=True)
         return open_stream_process(
             str(CONNECT_HELPER),
             str(LIBRARY),
@@ -519,7 +542,12 @@ def _build_bridge(
             environment=p2p_environment(),
         )
 
-    session = NativeStreamSession(start_stream, idle_timeout=idle_timeout)
+    session = NativeStreamSession(
+        start_stream,
+        idle_timeout=idle_timeout,
+        name=alias,
+        log=lambda line: print(line, flush=True),
+    )
     return CameraBridge(
         camera_id=alias,
         camera_name=device.name,
@@ -544,8 +572,12 @@ def main() -> int:
     try:
         load_vendor_runtime()
         cameras = enumerate_account()
-        for _alias, device in cameras:
-            run_p2p_acceptance(device)
+        for alias, device in cameras:
+            # One unreachable camera must not take the others down with it.
+            try:
+                run_p2p_acceptance(device, alias)
+            except P2PError:
+                print(f"camera_diagnostic_failed camera={alias}", flush=True)
         if cameras:
             configure_bridges(cameras)
     except Exception as error:
