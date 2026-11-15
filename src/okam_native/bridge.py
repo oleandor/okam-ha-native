@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import json
 import re
-import secrets
 import subprocess
 import sys
 import threading
@@ -53,6 +54,17 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
         )
 
 
+def stream_token(api_token: str, camera_id: str) -> str:
+    """A stable per-camera media token that does not reveal the API token."""
+
+    digest = hmac.new(
+        api_token.encode("utf-8"),
+        b"okam-native-stream:" + camera_id.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 class CameraBridge:
     """One camera exposed through a reference-counted native stream session."""
 
@@ -68,7 +80,11 @@ class CameraBridge:
         self.camera_id = camera_id
         self.camera_name = camera_name
         self._api_token = api_token
-        self._stream_token = secrets.token_urlsafe(32)
+        # Derived rather than random so it survives an app restart: Home
+        # Assistant caches the stream URL, and a new random token after every
+        # restart or update made the camera answer 401 until the integration
+        # was reloaded. It changes whenever the API token changes.
+        self._stream_token = stream_token(api_token, camera_id)
         self.session = session
         self.ffmpeg = ffmpeg
 

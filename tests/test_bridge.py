@@ -204,3 +204,31 @@ def test_dropped_clients_do_not_report_a_crash(capsys) -> None:
     assert "bridge_request_failed error=ValueError" in captured
     assert "172.30.32.2" not in captured
     assert "Traceback" not in captured
+
+
+def test_stream_token_is_stable_per_camera_and_hides_the_api_token() -> None:
+    from okam_native.bridge import stream_token
+
+    first = stream_token("safe-api-token-123", "kitchen")
+    assert first == stream_token("safe-api-token-123", "kitchen")
+    assert first != stream_token("safe-api-token-123", "front")
+    assert first != stream_token("other-api-token-456", "kitchen")
+    assert "safe-api-token-123" not in first
+    assert len(first) >= 40
+
+
+def test_stream_url_survives_a_bridge_restart() -> None:
+    # Home Assistant caches the stream URL; a restart must not invalidate it.
+    def make():
+        return CameraBridge(
+            camera_id="cabin",
+            camera_name="Cabin",
+            api_token="safe-api-token-123",
+            session=FakeSession(),  # type: ignore[arg-type]
+            ffmpeg="ffmpeg",
+        )
+
+    before, after = make(), make()
+    assert before.stream_url("bridge:8099") == after.stream_url("bridge:8099")
+    token = before.stream_url("bridge:8099").split("token=", 1)[1]
+    assert after.stream_authenticated(token)
