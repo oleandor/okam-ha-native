@@ -9,9 +9,9 @@ import secrets
 import subprocess
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .p2p import P2PError
 from .session import NativeStreamSession
@@ -112,7 +112,28 @@ class CameraBridge:
 
 
 StatusProvider = Callable[[], dict[str, object]]
-BridgeProvider = Callable[[], CameraBridge | None]
+# A provider may return a single bridge (the original one-camera contract), a
+# mapping of camera alias to bridge (multi-camera), or None while not ready.
+BridgeProvider = Callable[[], "CameraBridge | Mapping[str, CameraBridge] | None"]
+
+_CAMERA_PATH = re.compile(r"^/api/cameras/([^/]+)(/.*)$")
+
+
+def _normalize_bridges(
+    value: "CameraBridge | Mapping[str, CameraBridge] | None",
+) -> dict[str, CameraBridge]:
+    if value is None:
+        return {}
+    if isinstance(value, CameraBridge):
+        return {value.camera_id: value}
+    return {bridge.camera_id: bridge for bridge in value.values()}
+
+
+def _split_camera_path(path: str) -> tuple[str, str] | None:
+    match = _CAMERA_PATH.fullmatch(path)
+    if match is None:
+        return None
+    return unquote(match.group(1)), match.group(2)
 
 
 def make_handler(
@@ -156,47 +177,53 @@ def make_handler(
                 self._json(200 if ready else 503, payload)
                 return
 
-            bridge = bridge_provider()
-            if bridge is None:
+            bridges = _normalize_bridges(bridge_provider())
+            if not bridges:
                 self._json(503, {"error": "bridge_not_ready"})
                 return
-            camera_prefix = f"/api/cameras/{quote(bridge.camera_id, safe='')}"
-            if parsed.path in (
-                f"{camera_prefix}/stream.h264",
-                f"{camera_prefix}/stream.ts",
-            ):
+            route = _split_camera_path(parsed.path)
+            if route is not None and route[1] in ("/stream.h264", "/stream.ts"):
+                bridge = bridges.get(route[0])
                 token = parse_qs(parsed.query).get("token", [None])[0]
-                if not bridge.stream_authenticated(token):
+                # An unknown camera answers exactly like a bad token so that
+                # camera aliases cannot be probed without credentials.
+                if bridge is None or not bridge.stream_authenticated(token):
                     self._json(401, {"error": "unauthorized"})
                     return
-                if parsed.path.endswith("/stream.ts"):
+                if route[1] == "/stream.ts":
                     self._muxed_stream(bridge)
                 else:
                     self._raw_stream(bridge)
                 return
-            if not bridge.authenticated(self.headers.get("Authorization")):
+            if not self._api_authenticated(bridges):
                 self._json(401, {"error": "unauthorized"})
                 return
             if parsed.path == "/api/devices":
                 self._json(
                     200,
-                    [{"camera_id": bridge.camera_id, "name": bridge.camera_name}],
+                    [
+                        {"camera_id": bridge.camera_id, "name": bridge.camera_name}
+                        for bridge in bridges.values()
+                    ],
                 )
-            elif parsed.path == f"{camera_prefix}/status":
+                return
+            bridge = bridges.get(route[0]) if route is not None else None
+            if bridge is None or route is None:
+                self._json(404, {"error": "not_found"})
+            elif route[1] == "/status":
                 self._json(200, bridge.status())
-            elif parsed.path == f"{camera_prefix}/snapshot.jpg":
+            elif route[1] == "/snapshot.jpg":
                 self._snapshot(bridge)
-            elif parsed.path == f"{camera_prefix}/stream/source":
+            elif route[1] == "/stream/source":
                 self._json(200, {"stream_url": bridge.stream_url(self.headers.get("Host"))})
             else:
                 self._json(404, {"error": "not_found"})
 
         def do_PATCH(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            bridge = self._authorized_bridge()
+            bridge, action = self._authorized_route()
             if bridge is None:
                 return
-            camera_prefix = f"/api/cameras/{quote(bridge.camera_id, safe='')}"
-            if urlsplit(self.path).path != f"{camera_prefix}/config":
+            if action != "/config":
                 self._json(404, {"error": "not_found"})
                 return
             body = self._request_json()
@@ -210,31 +237,39 @@ def make_handler(
             self._json(200, {"idle_timeout_seconds": idle_timeout})
 
         def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            bridge = self._authorized_bridge()
+            bridge, action = self._authorized_route()
             if bridge is None:
                 return
-            camera_prefix = f"/api/cameras/{quote(bridge.camera_id, safe='')}"
-            path = urlsplit(self.path).path
-            if path == f"{camera_prefix}/stream/start":
+            if action == "/stream/start":
                 if self._request_json() is None:
                     return
                 self._json(200, {"stream_url": bridge.stream_url(self.headers.get("Host"))})
-            elif path == f"{camera_prefix}/stream/stop":
+            elif action == "/stream/stop":
                 if self._request_json() is None:
                     return
                 self._json(200, {"stopped": True})
             else:
                 self._json(404, {"error": "not_found"})
 
-        def _authorized_bridge(self) -> CameraBridge | None:
-            bridge = bridge_provider()
-            if bridge is None:
+        def _api_authenticated(self, bridges: Mapping[str, CameraBridge]) -> bool:
+            # Every bridge in one app shares the same user-created API token.
+            authorization = self.headers.get("Authorization")
+            return any(bridge.authenticated(authorization) for bridge in bridges.values())
+
+        def _authorized_route(self) -> tuple[CameraBridge | None, str]:
+            bridges = _normalize_bridges(bridge_provider())
+            if not bridges:
                 self._json(503, {"error": "bridge_not_ready"})
-                return None
-            if not bridge.authenticated(self.headers.get("Authorization")):
+                return None, ""
+            if not self._api_authenticated(bridges):
                 self._json(401, {"error": "unauthorized"})
-                return None
-            return bridge
+                return None, ""
+            route = _split_camera_path(urlsplit(self.path).path)
+            bridge = bridges.get(route[0]) if route is not None else None
+            if bridge is None or route is None:
+                self._json(404, {"error": "not_found"})
+                return None, ""
+            return bridge, route[1]
 
         def _snapshot(self, bridge: CameraBridge) -> None:
             try:

@@ -1,13 +1,13 @@
 # O-KAM Native Bridge
 
-O-KAM Native Bridge connects one O-KAM Pro camera directly to Home Assistant on
+O-KAM Native Bridge connects one or more O-KAM Pro cameras directly to Home Assistant on
 `aarch64` and `amd64` systems. It provides live H.264 video, JPEG snapshots,
 automatic camera wake-up, shared viewing, and automatic idle disconnect.
 
 ## Before configuring the app
 
-Use an O-KAM account that can view exactly one camera. This can be the normal
-camera-owner account or an account to which the camera was shared. Sign in with
+Use an O-KAM account that can view your cameras. This can be the normal
+camera-owner account or an account to which the cameras were shared. Sign in with
 that account in the O-KAM app once and confirm that live view works.
 
 ## Configuration
@@ -18,7 +18,8 @@ that account in the O-KAM app once and confirm that live view works.
 | `account_password` | Password of the O-KAM account |
 | `camera_password` | Optional camera-level password override; normally leave blank |
 | `api_token` | A random local secret of at least 16 characters chosen by you |
-| `camera_id` | Home Assistant camera alias, for example `cabin` |
+| `camera_id` | Home Assistant camera alias when the account has one camera, for example `cabin` |
+| `cameras` | Optional list choosing which cameras to expose and their aliases (see below) |
 | `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `120` is recommended |
 
 The API token is not an O-KAM credential. Create a new random value and enter
@@ -32,6 +33,27 @@ It is not the O-KAM account password.
 Leave `run_connect_test`, `run_auth_test`, `run_stream_test`, and
 `run_snapshot_test` disabled during normal operation. They are bounded
 diagnostic checks intended only for troubleshooting.
+
+## Several cameras
+
+Every camera in the account is exposed by one app. Without a `cameras` list,
+a single camera uses `camera_id` and several cameras get aliases made from
+their names; a name with no ASCII letters, such as a Thai name, becomes
+`camera_1`, `camera_2` and so on in account order. Set the list for stable
+aliases, using each name exactly as the O-KAM app shows it:
+
+```yaml
+cameras:
+  - name: หน้าบ้าน 3
+    camera_id: front3
+  - name: ห้องครัว
+    camera_id: kitchen
+```
+
+The startup log prints the aliases in use. Add the Home Assistant integration
+once per camera, with the same bridge URL and API token and that camera's
+alias. Each open live view keeps its own camera connection, so several
+simultaneous streams use more CPU and network than one.
 
 ## Starting the app
 

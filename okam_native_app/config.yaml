@@ -19,6 +19,7 @@ options:
   account_password: null
   api_token: null
   camera_id: cabin
+  cameras: []
   idle_timeout_seconds: 120
   run_connect_test: false
   run_auth_test: false
@@ -30,6 +31,9 @@ schema:
   camera_password: password?
   api_token: password
   camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
+  cameras:
+    - name: str
+      camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
   idle_timeout_seconds: "int(10,600)"
   run_connect_test: bool
   run_auth_test: bool

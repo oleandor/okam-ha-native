@@ -80,9 +80,14 @@ class OkamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except ValueError:
                 errors["base"] = "camera_not_found"
             else:
-                await self.async_set_unique_id(data[CONF_BRIDGE_URL].lower())
+                # One entry per camera: the same bridge can serve several.
+                await self.async_set_unique_id(
+                    f"{data[CONF_BRIDGE_URL].lower()}#{data[CONF_CAMERA_ID]}"
+                )
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(title="O-KAM Native Bridge", data=data)
+                return self.async_create_entry(
+                    title=f"O-KAM {data[CONF_CAMERA_ID]}", data=data
+                )
         return self.async_show_form(
             step_id="user", data_schema=_schema(user_input), errors=errors
         )

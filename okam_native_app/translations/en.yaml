@@ -1,7 +1,7 @@
 configuration:
   account_username:
     name: O-KAM account email
-    description: Email address of an O-KAM account that can view exactly one camera.
+    description: Email address of the O-KAM account that can view your cameras.
   account_password:
     name: O-KAM account password
     description: Password for the O-KAM account.
@@ -10,7 +10,10 @@ configuration:
     description: A random secret of at least 16 characters that you create and also enter in the Home Assistant integration.
   camera_id:
     name: Camera alias
-    description: Local Home Assistant name for the camera, for example cabin.
+    description: Local Home Assistant name for the camera when the account has only one camera, for example cabin.
+  cameras:
+    name: Cameras
+    description: Optional. One entry per camera to expose, with name exactly as shown in the O-KAM app and a local camera_id alias. Leave empty to expose every camera in the account.
   idle_timeout_seconds:
     name: Idle disconnect delay
     description: Seconds to wait after the final viewer closes before stopping and disconnecting the camera.
