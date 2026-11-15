@@ -243,3 +243,20 @@ def test_pc_client_live_start_is_opt_in_in_schema_and_helper() -> None:
     assert helper.count("send_cgi(write_cgi, client, ACTIVE_TIME_COMMAND)") == 1
     assert "if (!pc_client_live_start) return;" in helper
     assert "pc_client_live_start = account_user_id != NULL;" in helper
+
+
+def test_release_creation_is_automated_and_guarded() -> None:
+    # Releases were created by hand, so a merge published the image without a
+    # release entry. The step reuses the latest-tag guard, so a test build
+    # published from a branch cannot create one.
+    workflow = (ROOT / ".github" / "workflows" / "publish-image.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Create the GitHub release" in workflow
+    assert "if: needs.prepare.outputs.move_latest == 'true'" in workflow
+    assert "gh release create" in workflow
+    # Idempotent, so re-running a publish cannot fail on an existing release.
+    assert 'gh release view "v$VERSION"' in workflow
+    # Creating a release needs write access the workflow does not grant by default.
+    assert "contents: write" in workflow
