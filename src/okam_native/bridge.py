@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .p2p import P2PError
-from .session import NativeStreamSession
+from .session import NativeStreamSession, probe_codec
 
 
 MAX_REQUEST_BYTES = 4096
@@ -322,6 +322,15 @@ def make_handler(
                 return
             muxer: subprocess.Popen[bytes] | None = None
             writer: threading.Thread | None = None
+            # The camera decides the codec. Wait for its first parameter set so
+            # FFmpeg is told the right raw format; H.265-only cameras sent no
+            # usable video before this.
+            chunks = iter(subscription)
+            codec, initial = probe_codec(chunks)
+            if not initial:
+                subscription.close()
+                self._json(503, {"error": "stream_unavailable"})
+                return
             try:
                 muxer = subprocess.Popen(
                     [
@@ -330,7 +339,7 @@ def make_handler(
                         "-loglevel", "error",
                         "-fflags", "+genpts",
                         "-use_wallclock_as_timestamps", "1",
-                        "-f", "h264",
+                        "-f", codec,
                         "-i", "pipe:0",
                         "-c:v", "copy",
                         "-f", "mpegts",
@@ -351,7 +360,10 @@ def make_handler(
 
             def feed() -> None:
                 try:
-                    for chunk in subscription:
+                    for chunk in initial:
+                        muxer.stdin.write(chunk)  # type: ignore[union-attr]
+                        muxer.stdin.flush()  # type: ignore[union-attr]
+                    for chunk in chunks:
                         muxer.stdin.write(chunk)  # type: ignore[union-attr]
                         muxer.stdin.flush()  # type: ignore[union-attr]
                 except (BrokenPipeError, ConnectionError, OSError, ValueError):

@@ -30,6 +30,9 @@ SUMMARY_LOG_FIELDS = (
     "h264_frames",
     "h265_frames",
     "keyframe_seen",
+    "stream_end_reason",
+    "last_magic",
+    "last_frame_type",
     "disconnected",
 )
 ANNEX_B_START = b"\x00\x00\x01"
@@ -37,6 +40,51 @@ ANNEX_B_START = b"\x00\x00\x01"
 # unparsable rather than buffered indefinitely.
 MAX_PREAMBLE_BYTES = 1024 * 1024
 MAX_SCAN_BYTES = 4 * 1024 * 1024
+# How much of a fresh stream to inspect before assuming H.264.
+MAX_CODEC_PROBE_BYTES = 2 * 1024 * 1024
+# An H.265 VPS NAL header (type 32). H.264 never uses NAL type 0, which is what
+# this byte pair would be in H.264, so it is an unambiguous H.265 marker.
+HEVC_VPS = b"\x00\x00\x01\x40\x01"
+HEVC_PARAMETER_SETS = (b"\x00\x00\x01\x42\x01", b"\x00\x00\x01\x44\x01")
+H264_SPS_TYPES = frozenset({0x27, 0x47, 0x67})
+
+
+def detect_codec(data: bytes) -> str | None:
+    """Name the Annex-B codec in ``data`` once a parameter set identifies it.
+
+    Returns ``"hevc"`` or ``"h264"`` (FFmpeg's raw demuxer names), or None
+    while neither has been seen yet.
+    """
+
+    if HEVC_VPS in data or any(marker in data for marker in HEVC_PARAMETER_SETS):
+        return "hevc"
+    position = data.find(ANNEX_B_START)
+    while 0 <= position < len(data) - len(ANNEX_B_START):
+        if data[position + len(ANNEX_B_START)] in H264_SPS_TYPES:
+            return "h264"
+        position = data.find(ANNEX_B_START, position + 1)
+    return None
+
+
+def probe_codec(chunks: Iterator[bytes]) -> tuple[str, list[bytes]]:
+    """Read from a live subscription until the codec is known.
+
+    Returns the codec and every chunk consumed, which the caller must still
+    deliver. Falls back to H.264, the historical default, when the stream ends
+    or the probe limit is reached without a parameter set.
+    """
+
+    consumed: list[bytes] = []
+    seen = bytearray()
+    for chunk in chunks:
+        consumed.append(chunk)
+        seen.extend(chunk)
+        codec = detect_codec(bytes(seen))
+        if codec is not None:
+            return codec, consumed
+        if len(seen) >= MAX_CODEC_PROBE_BYTES:
+            break
+    return "h264", consumed
 
 
 @dataclass(frozen=True)
@@ -111,7 +159,9 @@ class NativeStreamSession:
         self._scan = bytearray()
         self._sps = b""
         self._pps = b""
+        self._vps = b""
         self._keyframe = b""
+        self._codec: str | None = None
         self._closed = False
 
     def acquire(self) -> StreamSubscription:
@@ -148,6 +198,8 @@ class NativeStreamSession:
         decoder: subprocess.Popen[bytes] | None = None
         writer: threading.Thread | None = None
         try:
+            chunks = iter(subscription)
+            codec, initial = probe_codec(chunks)
             decoder = subprocess.Popen(
                 [
                     ffmpeg,
@@ -155,7 +207,7 @@ class NativeStreamSession:
                     "-loglevel",
                     "error",
                     "-f",
-                    "h264",
+                    codec,
                     "-i",
                     "pipe:0",
                     "-frames:v",
@@ -178,7 +230,9 @@ class NativeStreamSession:
 
             def feed() -> None:
                 try:
-                    for chunk in subscription:
+                    for chunk in initial:
+                        decoder_input.write(chunk)
+                    for chunk in chunks:
                         decoder_input.write(chunk)
                 except (BrokenPipeError, OSError):
                     pass
@@ -233,6 +287,19 @@ class NativeStreamSession:
     def _record_unit(self, unit: bytes) -> None:
         if len(unit) <= len(ANNEX_B_START) or len(unit) > MAX_PREAMBLE_BYTES:
             return
+        if self._codec is None:
+            self._codec = detect_codec(unit)
+        if self._codec == "hevc":
+            kind = (unit[len(ANNEX_B_START)] >> 1) & 0x3F
+            if kind == 32:
+                self._vps = unit
+            elif kind == 33:
+                self._sps = unit
+            elif kind == 34:
+                self._pps = unit
+            elif kind in (19, 20, 21):
+                self._keyframe = unit
+            return
         kind = unit[len(ANNEX_B_START)] & 0x1F
         if kind == 7:
             self._sps = unit
@@ -246,7 +313,9 @@ class NativeStreamSession:
 
         if not self._sps or not self._pps:
             return b""
-        preamble = self._sps + self._pps + self._keyframe
+        if self._codec == "hevc" and not self._vps:
+            return b""
+        preamble = self._vps + self._sps + self._pps + self._keyframe
         return preamble if len(preamble) <= MAX_PREAMBLE_BYTES else b""
 
     def status(self) -> SessionStatus:
@@ -275,7 +344,8 @@ class NativeStreamSession:
         self._media_ready = False
         # A new helper means a new encoder state, so cached units are stale.
         self._scan.clear()
-        self._sps = self._pps = self._keyframe = b""
+        self._sps = self._pps = self._vps = self._keyframe = b""
+        self._codec = None
         process = self._starter()
         if process.stdout is None or process.stderr is None:
             process.kill()

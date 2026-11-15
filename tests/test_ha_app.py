@@ -154,6 +154,20 @@ def test_image_ffmpeg_can_mux_the_live_stream() -> None:
     assert "--enable-demuxer=h264" in dockerfile
 
 
+def test_image_ffmpeg_passes_h265_through_without_gpl_components() -> None:
+    # H.265 cameras are muxed and snapshotted, never re-encoded: the HEVC
+    # demuxer, parser and decoder are LGPL and add no CPU cost for H.264
+    # cameras. A libx264 re-encode would make the shipped binary GPL and is
+    # deliberately left out.
+    dockerfile = (ROOT / "okam_native_app" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "--enable-demuxer=hevc" in dockerfile
+    assert "--enable-parser=hevc" in dockerfile
+    assert "--enable-decoder=hevc" in dockerfile
+    assert "--enable-gpl" not in dockerfile
+    assert "libx264" not in dockerfile
+
+
 def test_latest_tag_only_ever_follows_main() -> None:
     # A test build published from a branch must not repoint the tag that
     # installations track.

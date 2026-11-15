@@ -232,3 +232,79 @@ def test_stream_end_logs_a_sanitized_per_camera_summary() -> None:
     assert "login_result=0" in line
     assert "authenticated=true" in line
     assert "SECRET-UID" not in line and "hunter2" not in line
+
+
+from okam_native.session import detect_codec, probe_codec
+
+HEVC_VPS_UNIT = b"\x00\x00\x01\x40\x01\x0c"
+HEVC_SPS_UNIT = b"\x00\x00\x01\x42\x01\x01"
+HEVC_PPS_UNIT = b"\x00\x00\x01\x44\x01\xc1"
+HEVC_IDR_UNIT = b"\x00\x00\x01\x26\x01\xaf"  # NAL type 19 (IDR_W_RADL)
+HEVC_TRAIL_UNIT = b"\x00\x00\x01\x02\x01\xd0"  # NAL type 1
+
+
+def test_codec_is_detected_from_parameter_sets() -> None:
+    assert detect_codec(b"junk" + HEVC_VPS_UNIT) == "hevc"
+    assert detect_codec(HEVC_SPS_UNIT) == "hevc"
+    assert detect_codec(b"\x00\x00\x00\x01\x67\x42") == "h264"
+    assert detect_codec(_unit(1)) is None
+    assert detect_codec(b"") is None
+
+
+def test_probe_returns_every_consumed_chunk_with_the_codec() -> None:
+    chunks = iter([_unit(1), HEVC_VPS_UNIT, HEVC_TRAIL_UNIT])
+    codec, consumed = probe_codec(chunks)
+    assert codec == "hevc"
+    assert consumed == [_unit(1), HEVC_VPS_UNIT]
+    assert next(chunks) == HEVC_TRAIL_UNIT
+
+
+def test_probe_detects_a_parameter_set_split_across_chunks() -> None:
+    codec, consumed = probe_codec(iter([b"\x00\x00\x01\x40", b"\x01\x0c"]))
+    assert codec == "hevc"
+    assert len(consumed) == 2
+
+
+def test_probe_falls_back_to_h264_when_the_stream_ends_unidentified() -> None:
+    assert probe_codec(iter([_unit(1)])) == ("h264", [_unit(1)])
+    assert probe_codec(iter([])) == ("h264", [])
+
+
+def test_hevc_viewer_starts_with_vps_sps_pps_and_keyframe() -> None:
+    process = FakeProcess()
+    session = NativeStreamSession(lambda: process, idle_timeout=60)  # type: ignore[arg-type]
+    first = session.acquire()
+    process.stdout.chunks.put(
+        HEVC_VPS_UNIT + HEVC_SPS_UNIT + HEVC_PPS_UNIT + HEVC_IDR_UNIT + HEVC_TRAIL_UNIT
+    )
+    assert _wait_until(lambda: session.status().media_ready)
+    assert _wait_until(lambda: session._preamble() != b"")
+    later = session.acquire()
+    assert next(iter(later)) == (
+        HEVC_VPS_UNIT + HEVC_SPS_UNIT + HEVC_PPS_UNIT + HEVC_IDR_UNIT
+    )
+    first.close()
+    later.close()
+    session.close()
+
+
+def test_summary_reports_why_forwarding_stopped() -> None:
+    lines: list[str] = []
+    process = SummaryProcess(
+        b'{"connected":true,"authenticated":true,"h264_frames":0,"h265_frames":0,'
+        b'"stream_end_reason":2,"last_magic":305419896,"last_frame_type":3,'
+        b'"disconnected":true}\n'
+    )
+    session = NativeStreamSession(
+        lambda: process,  # type: ignore[arg-type]
+        idle_timeout=60,
+        media_timeout=0.05,
+        name="side",
+        log=lines.append,
+    )
+    viewer = session.acquire()
+    assert _wait_until(lambda: bool(lines))
+    viewer.close()
+    assert "stream_end_reason=2" in lines[0]
+    assert "last_magic=305419896" in lines[0]
+    assert "last_frame_type=3" in lines[0]

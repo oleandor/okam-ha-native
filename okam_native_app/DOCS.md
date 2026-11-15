@@ -66,8 +66,8 @@ stream_ended camera=front3 returncode=0 media_ready=true error=none connected=tr
 ```
 
 `login_result=-1` means the camera refused its password. `h265_frames` above
-zero with `h264_frames=0` means the camera sends H.265, which the bridge does
-not forward yet. `error=no_media_timeout` means no video arrived within 90
+zero with `h264_frames=0` means the camera sends H.265, which the bridge forwards
+as is (playback then depends on the browser's H.265 support). `error=no_media_timeout` means no video arrived within 90
 seconds and the session was stopped.
 
 ## Starting the app

@@ -30,6 +30,16 @@
 #define MIN_H264_FRAMES 3U
 #define MIN_H264_BYTES 1024U
 
+/* Why live forwarding stopped; reported in the final sanitized summary. */
+#define STREAM_END_NONE 0U
+#define STREAM_END_HEADER_READ 1U
+#define STREAM_END_BAD_MAGIC 2U
+#define STREAM_END_BAD_LENGTH 3U
+#define STREAM_END_NO_MEMORY 4U
+#define STREAM_END_PAYLOAD_READ 5U
+#define STREAM_END_OUTPUT_CLOSED 6U
+#define STREAM_END_STOPPED 7U
+
 typedef void *(*client_create_fn)(const char *, const char *);
 typedef int (*client_connect_fn)(void *, int, const char *, int);
 typedef bool (*client_login_fn)(void *, const char *, const char *);
@@ -255,25 +265,52 @@ static bool write_stdout(const unsigned char *payload, size_t size) {
     return true;
 }
 
-static bool forward_h264_frames(client_read_fn client_read, void *client,
-                                unsigned int *frames, unsigned long long *bytes,
-                                bool *keyframe_seen, unsigned int *h265_frames) {
+static bool is_h265_frame(const unsigned char *header) {
+    return header[4] == 0x10U || header[4] == 0x11U;
+}
+
+/* Forward live video to stdout as Annex-B. H.264 frames are validated before
+ * forwarding; H.265 frames (flagged in the frame header) are forwarded as
+ * they are, so cameras that only encode H.265 still produce a stream. The
+ * bridge detects the codec from the elementary stream itself. */
+static bool forward_video_frames(client_read_fn client_read, void *client,
+                                 unsigned int *frames, unsigned long long *bytes,
+                                 bool *keyframe_seen, unsigned int *h265_frames,
+                                 unsigned int *end_reason, uint32_t *last_magic,
+                                 unsigned int *last_frame_type) {
+    *end_reason = STREAM_END_STOPPED;
     while (stream_running) {
         time_t deadline = time(NULL) + STREAM_TIMEOUT_SECONDS;
         unsigned char header[VIDEO_HEADER_BYTES];
         if (!read_client_exact(client_read, client, VIDEO_CHANNEL,
-                               header, sizeof(header), deadline)) return false;
-        if (read_le32(header) != 0xa815aa55U) return false;
+                               header, sizeof(header), deadline)) {
+            *end_reason = STREAM_END_HEADER_READ;
+            return false;
+        }
+        *last_magic = read_le32(header);
+        *last_frame_type = header[4];
+        if (*last_magic != 0xa815aa55U) {
+            *end_reason = STREAM_END_BAD_MAGIC;
+            return false;
+        }
         uint32_t length = read_le32(header + 16);
-        if (length == 0 || length > MAX_VIDEO_FRAME_BYTES) return false;
+        if (length == 0 || length > MAX_VIDEO_FRAME_BYTES) {
+            *end_reason = STREAM_END_BAD_LENGTH;
+            return false;
+        }
         unsigned char *payload = malloc(length);
-        if (payload == NULL) return false;
+        if (payload == NULL) {
+            *end_reason = STREAM_END_NO_MEMORY;
+            return false;
+        }
         bool read_ok = read_client_exact(client_read, client, VIDEO_CHANNEL,
                                          payload, length, deadline);
         bool write_ok = true;
         if (read_ok) {
-            if (header[4] == 0x10U || header[4] == 0x11U) {
+            if (is_h265_frame(header)) {
                 (*h265_frames)++;
+                *bytes += length;
+                write_ok = write_stdout(payload, length);
             } else if (inspect_h264_payload(payload, length, keyframe_seen)) {
                 (*frames)++;
                 *bytes += length;
@@ -282,13 +319,17 @@ static bool forward_h264_frames(client_read_fn client_read, void *client,
         }
         memset(payload, 0, length);
         free(payload);
-        if (!read_ok) return false;
+        if (!read_ok) {
+            *end_reason = STREAM_END_PAYLOAD_READ;
+            return false;
+        }
         if (!write_ok) {
+            *end_reason = STREAM_END_OUTPUT_CLOSED;
             stream_running = 0;
             break;
         }
     }
-    return *frames > 0;
+    return *frames > 0 || *h265_frames > 0;
 }
 
 int main(int argc, char **argv) {
@@ -384,6 +425,9 @@ int main(int argc, char **argv) {
     unsigned int h264_frames = 0;
     unsigned int h265_frames = 0;
     unsigned long long h264_bytes = 0;
+    unsigned int stream_end_reason = STREAM_END_NONE;
+    uint32_t last_magic = 0;
+    unsigned int last_frame_type = 0;
     if (client != NULL) {
         state = client_connect(client, CONNECT_TYPE_NORMAL, service_parameter, 0);
         connected = state == CONNECT_STATE_ONLINE;
@@ -403,9 +447,10 @@ int main(int argc, char **argv) {
                     signal(SIGPIPE, SIG_IGN);
                     signal(SIGINT, stop_streaming);
                     signal(SIGTERM, stop_streaming);
-                    h264_received = forward_h264_frames(
+                    h264_received = forward_video_frames(
                         client_read, client, &h264_frames, &h264_bytes,
-                        &keyframe_seen, &h265_frames);
+                        &keyframe_seen, &h265_frames, &stream_end_reason,
+                        &last_magic, &last_frame_type);
                 } else {
                     h264_received = await_h264_frames(
                         client_read, client, &h264_frames, &h264_bytes,
@@ -431,13 +476,16 @@ int main(int argc, char **argv) {
                 "\"login_command\":%u,\"login_result\":%d,"
                 "\"stream_start_sent\":%s,\"stream_stop_sent\":%s,"
                 "\"h264_received\":%s,\"h264_frames\":%u,\"h264_bytes\":%llu,"
-                "\"keyframe_seen\":%s,\"h265_frames\":%u,\"disconnected\":%s}\n",
+                "\"keyframe_seen\":%s,\"h265_frames\":%u,"
+                "\"stream_end_reason\":%u,\"last_magic\":%u,"
+                "\"last_frame_type\":%u,\"disconnected\":%s}\n",
                 connected ? "true" : "false", state, login_sent ? "true" : "false",
                 login_response_received ? "true" : "false",
                 authenticated ? "true" : "false", login_command, login_result,
                 stream_start_sent ? "true" : "false", stream_stop_sent ? "true" : "false",
                 h264_received ? "true" : "false", h264_frames, h264_bytes,
                 keyframe_seen ? "true" : "false", h265_frames,
+                stream_end_reason, (unsigned int)last_magic, last_frame_type,
                 disconnected ? "true" : "false");
     } else if (stream_test) {
         printf("{\"connected\":%s,\"connect_state\":%d,\"login_sent\":%s,"

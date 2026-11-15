@@ -82,6 +82,9 @@ RUN curl -fsSL "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_VER
       --enable-demuxer=h264 \
       --enable-parser=h264 \
       --enable-decoder=h264 \
+      --enable-demuxer=hevc \
+      --enable-parser=hevc \
+      --enable-decoder=hevc \
       --enable-encoder=mjpeg \
       --enable-muxer=image2pipe \
       --enable-muxer=mpegts \
