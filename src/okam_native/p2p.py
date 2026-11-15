@@ -386,6 +386,118 @@ def run_stream_probe(
     return _stream_result(payload, completed.returncode)
 
 
+def run_channel_probe(
+    helper: str,
+    library: str,
+    uid: str,
+    service_parameter: str,
+    device_password: str,
+    *,
+    environment: dict[str, str],
+    timeout: float = 240.0,
+) -> dict[str, object]:
+    """Ask the helper which P2P channels carry data for each live substream."""
+
+    stdin = _field(uid) + _field(service_parameter) + _field(device_password)
+    try:
+        completed = subprocess.run(
+            [helper, library, "--channel-probe"],
+            input=stdin,
+            capture_output=True,
+            timeout=timeout,
+            env=environment,
+            check=False,
+        )
+        payload = json.loads(completed.stdout.decode("utf-8"))
+    except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
+        raise P2PError("native channel probe failed") from None
+    if not isinstance(payload, dict):
+        raise P2PError("native channel probe returned an invalid response")
+    return payload
+
+
+# Capability flags from get_status.cgi that decide how the official app plays
+# a multi-sensor camera. Anything else the helper might report is dropped.
+PROBE_STATUS_FLAGS = (
+    "support_mutil_sensor_stream",
+    "dev_sensor_num",
+    "support_binocular_mutil",
+    "splitScreen",
+    "support_dual_sensor_stitch",
+    "support_three_sensor_binocular",
+    "sensornum",
+    "binocular_num",
+    "support_binocular",
+    "support_fix_sensor",
+    "pininpic_sensor",
+)
+
+
+def channel_probe_lines(alias: str, payload: dict[str, object]) -> list[str]:
+    """Sanitized log lines: counters and frame-header words only."""
+
+    def number(value: object) -> str:
+        return str(value) if isinstance(value, int) and not isinstance(value, bool) else "-"
+
+    def flag(value: object) -> str:
+        return str(value).lower() if isinstance(value, bool) else "-"
+
+    lines = [
+        f"channel_probe camera={alias} connected={flag(payload.get('connected'))} "
+        f"authenticated={flag(payload.get('authenticated'))} "
+        f"login_result={number(payload.get('login_result'))}"
+    ]
+    status = payload.get("status")
+    if isinstance(status, dict):
+        flags = status.get("flags")
+        found = []
+        if isinstance(flags, dict):
+            for key in PROBE_STATUS_FLAGS:
+                value = flags.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    found.append(f"{key}={value}")
+        lines.append(
+            f"channel_probe camera={alias} status requested={flag(status.get('requested'))} "
+            f"responses={number(status.get('responses'))} "
+            f"flags={','.join(found) if found else 'none'}"
+        )
+    probes = payload.get("probes")
+    nvr_probes = payload.get("nvr_probes")
+    tagged = [("substream", probe) for probe in (probes if isinstance(probes, list) else [])]
+    tagged += [("nvr", probe) for probe in (nvr_probes if isinstance(nvr_probes, list) else [])]
+    for kind, probe in tagged:
+        if not isinstance(probe, dict):
+            continue
+        parts = [f"channel_probe camera={alias}"]
+        if kind == "nvr":
+            parts.append(
+                f"nvr_chns={number(probe.get('chns'))} "
+                f"streammask={number(probe.get('streammask'))}"
+            )
+        else:
+            parts.append(f"substream={number(probe.get('substream'))}")
+        parts.append(f"start_sent={flag(probe.get('start_sent'))}")
+        if "responses" in probe:
+            parts.append(
+                f"responses={number(probe.get('responses'))} "
+                f"last_command={number(probe.get('last_command'))} "
+                f"last_result={number(probe.get('last_result'))}"
+            )
+        channels = probe.get("channels")
+        found = [c for c in channels if isinstance(c, dict)] if isinstance(channels, list) else []
+        if not found:
+            parts.append("channels=none")
+        for channel in found:
+            magic = channel.get("magic")
+            magic_text = f"{magic:08x}" if isinstance(magic, int) and not isinstance(magic, bool) else "-"
+            parts.append(
+                f"ch{number(channel.get('channel'))}="
+                f"{number(channel.get('bytes'))}b/magic={magic_text}/type={number(channel.get('type'))}"
+            )
+        lines.append(" ".join(parts))
+    return lines
+
+
 def _stream_result(payload: object, returncode: int) -> StreamProbeResult:
     bool_fields = (
         "connected",

@@ -20,11 +20,13 @@ from okam_native.account import AccountDevice, AccountError, Eye4AccountClient
 from okam_native.bridge import CameraBridge, QuietThreadingHTTPServer, make_handler
 from okam_native.p2p import (
     P2PError,
+    channel_probe_lines,
     diagnostic_line,
     get_service_parameter,
     open_stream_process,
     resolve_client_id,
     run_authentication_probe,
+    run_channel_probe,
     run_connect_probe,
     run_snapshot_probe,
     run_stream_probe,
@@ -557,6 +559,38 @@ def _build_bridge(
     )
 
 
+def run_requested_channel_probe(cameras: list[tuple[str, AccountDevice]]) -> None:
+    """Report which P2P channels carry video for the ``probe_camera`` alias."""
+
+    options = load_options()
+    target = options.get("probe_camera")
+    if not isinstance(target, str) or not target:
+        return
+    for alias, device in cameras:
+        if alias != target:
+            continue
+        try:
+            password = select_camera_password(
+                device.device_password, configured_camera_password(alias, options)
+            )
+            client_id = resolve_client_id(device.uid)
+            payload = run_channel_probe(
+                str(CONNECT_HELPER),
+                str(LIBRARY),
+                client_id,
+                get_service_parameter(client_id),
+                password,
+                environment=p2p_environment(),
+            )
+        except P2PError:
+            print(f"channel_probe camera={alias} failed=true", flush=True)
+            return
+        for line in channel_probe_lines(alias, payload):
+            print(line, flush=True)
+        return
+    print(f"channel_probe camera={target} not_found=true", flush=True)
+
+
 def main() -> int:
     server = QuietThreadingHTTPServer(
         ("0.0.0.0", 8099), make_handler(get_status, get_bridges)
@@ -572,6 +606,7 @@ def main() -> int:
     try:
         load_vendor_runtime()
         cameras = enumerate_account()
+        run_requested_channel_probe(cameras)
         for alias, device in cameras:
             # One unreachable camera must not take the others down with it.
             try:

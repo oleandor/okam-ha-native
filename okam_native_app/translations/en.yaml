@@ -29,5 +29,8 @@ configuration:
   run_snapshot_test:
     name: Run complete snapshot diagnostic
     description: Wake, connect, authenticate, receive H.264, create one JPEG, and disconnect when the app starts. Leave disabled for normal use.
+  probe_camera:
+    name: Channel probe camera
+    description: Optional camera alias. At startup, try each live substream on that camera and log which P2P channels carry video. For diagnosing cameras that send no video, such as multi-lens models. Leave empty for normal use.
 network:
   8099/tcp: Local bridge API used by the Home Assistant integration

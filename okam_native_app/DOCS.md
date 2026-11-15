@@ -70,6 +70,14 @@ zero with `h264_frames=0` means the camera sends H.265, which the bridge forward
 as is (playback then depends on the browser's H.265 support). `error=no_media_timeout` means no video arrived within 90
 seconds and the session was stopped.
 
+## Diagnosing a camera with no video
+
+Set `probe_camera` to a camera alias and restart the app. The log then shows
+one `channel_probe` line per live substream, for example
+`channel_probe camera=side substream=2 start_sent=true ch1=812345b/magic=a815aa55/type=16`.
+`channels=none` means the camera sent nothing for that substream. Clear the
+option again afterwards; the probe takes about half a minute at every start.
+
 ## Starting the app
 
 Save the configuration and start the app. Automatic startup is enabled by

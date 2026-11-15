@@ -40,3 +40,4 @@ schema:
   run_auth_test: bool
   run_stream_test: bool
   run_snapshot_test: bool
+  probe_camera: str?
