@@ -582,7 +582,12 @@ def main() -> int:
             configure_bridges(cameras)
     except Exception as error:
         phase = "startup_error" if STATUS["loader_ready"] else "native_loader_error"
-        detail = str(error).replace(" ", "_") if isinstance(error, P2PError) else None
+        # Both exception types carry fixed, identifier-free messages.
+        detail = (
+            str(error).replace(" ", "_")
+            if isinstance(error, (P2PError, AccountError))
+            else None
+        )
         set_status(phase=phase, error=type(error).__name__, error_detail=detail)
         suffix = f" detail={detail}" if detail else ""
         print(f"startup_ready=false error={type(error).__name__}{suffix}", flush=True)

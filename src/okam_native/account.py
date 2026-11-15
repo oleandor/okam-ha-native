@@ -42,6 +42,20 @@ def _open_request(request: urllib.request.Request, timeout: float) -> bytes:
     return payload
 
 
+# Step labels for diagnostics, so error messages never carry service routes.
+_REQUEST_STEPS = {
+    "/user/summary": "summary",
+    "/login/token": "login",
+    "/PC/device/show": "devices",
+}
+
+
+def _request_failure(path: str, error_type: str, extra: str = "") -> str:
+    step = _REQUEST_STEPS.get(path, "request")
+    message = f"official account service request failed step={step} error_type={error_type}"
+    return f"{message} {extra}" if extra else message
+
+
 class Eye4AccountClient:
     """Reproduce the three official WebViewer account requests over HTTPS."""
 
@@ -80,8 +94,19 @@ class Eye4AccountClient:
             result = json.loads(payload.decode("utf-8"))
         except AccountError:
             raise
-        except (OSError, UnicodeError, json.JSONDecodeError, urllib.error.URLError):
-            raise AccountError("official account service request failed") from None
+        except urllib.error.HTTPError as error:
+            raise AccountError(
+                _request_failure(path, "HTTPError", f"http_status={error.code}")
+            ) from None
+        except urllib.error.URLError as error:
+            # Only the class of the underlying reason: its text can carry a
+            # hostname or address.
+            reason = type(getattr(error, "reason", None)).__name__
+            raise AccountError(
+                _request_failure(path, "URLError", f"reason_type={reason}")
+            ) from None
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise AccountError(_request_failure(path, type(error).__name__)) from None
         return result
 
     def enumerate(self, username: str, password: str) -> list[AccountDevice]:
