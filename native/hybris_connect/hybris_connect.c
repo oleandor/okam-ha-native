@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -8,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/select.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -399,6 +401,168 @@ static bool is_h265_frame(const unsigned char *header) {
     return header[4] == 0x10U || header[4] == 0x11U;
 }
 
+/* Camera controls during a live session.
+ *
+ * The bridge passes the read end of a pipe in OKAM_CONTROL_FD. Each request is
+ * two bytes, an operation and a value, so only the fixed commands below can
+ * ever reach the camera. Commands go through the session that is already
+ * streaming, between video frames; replies are read from the command channel
+ * only while a request is pending. Results are reported on stderr as
+ * `control_state` lines that carry integers only. */
+#define CONTROL_OP_LIGHT 1U
+#define CONTROL_OP_SIREN 2U
+#define CONTROL_OP_NIGHT_VISION 3U
+#define CONTROL_OP_QUERY 4U
+#define CONTROL_REPLY_SECONDS 6
+#define CONTROL_REPLY_POLLS 4
+#define TRANS_COMMAND_RESPONSE 24785U
+#define CAMERA_PARAMS_RESPONSE 24579U
+#define LIGHT_SIREN_STATUS_COMMAND "trans_cmd_string.cgi?cmd=2109&command=2&"
+#define CAMERA_PARAMS_COMMAND "get_camera_params.cgi?"
+
+typedef struct {
+    int fd;
+    client_write_cgi_fn write_cgi;
+    void *client;
+    time_t reply_deadline;
+    unsigned char *buffer;
+} control_context;
+
+static control_context controls = {-1, NULL, NULL, 0, NULL};
+
+static bool read_command_frame(client_read_fn client_read, void *client,
+                               unsigned char *payload, size_t capacity,
+                               unsigned int *command, size_t *length);
+
+static void open_control_channel(client_write_cgi_fn write_cgi, void *client) {
+    const char *value = getenv("OKAM_CONTROL_FD");
+    if (value == NULL || write_cgi == NULL) return;
+    char *end = NULL;
+    long fd = strtol(value, &end, 10);
+    if (end == value || *end != '\0' || fd < 3 || fd > 1023) return;
+    int flags = fcntl((int)fd, F_GETFL);
+    if (flags < 0 || fcntl((int)fd, F_SETFL, flags | O_NONBLOCK) < 0) return;
+    controls.buffer = malloc(MAX_COMMAND_BYTES);
+    if (controls.buffer == NULL) return;
+    controls.fd = (int)fd;
+    controls.write_cgi = write_cgi;
+    controls.client = client;
+}
+
+static void close_control_channel(void) {
+    if (controls.fd >= 0) close(controls.fd);
+    controls.fd = -1;
+    free(controls.buffer);
+    controls.buffer = NULL;
+}
+
+/* Black and white, full colour, smart and starlight night vision, as the
+ * official app sets them: full-colour mode (param 33), then IR-cut (param 14). */
+static const int night_full_color_mode[] = {0, 1, 2, 0};
+static const int night_ircut[] = {1, 1, 1, 0};
+
+static bool run_control(unsigned int op, unsigned int value) {
+    char command[96];
+    switch (op) {
+    case CONTROL_OP_LIGHT:
+    case CONTROL_OP_SIREN:
+        if (value > 1U) return false;
+        snprintf(command, sizeof(command), "trans_cmd_string.cgi?cmd=2109&command=0&%s=%u&",
+                 op == CONTROL_OP_LIGHT ? "light" : "siren", value);
+        send_cgi(controls.write_cgi, controls.client, command);
+        send_cgi(controls.write_cgi, controls.client, LIGHT_SIREN_STATUS_COMMAND);
+        return true;
+    case CONTROL_OP_NIGHT_VISION:
+        if (value > 3U) return false;
+        snprintf(command, sizeof(command), "camera_control.cgi?param=33&value=%d&",
+                 night_full_color_mode[value]);
+        send_cgi(controls.write_cgi, controls.client, command);
+        snprintf(command, sizeof(command), "camera_control.cgi?param=14&value=%d&",
+                 night_ircut[value]);
+        send_cgi(controls.write_cgi, controls.client, command);
+        send_cgi(controls.write_cgi, controls.client, CAMERA_PARAMS_COMMAND);
+        return true;
+    case CONTROL_OP_QUERY:
+        send_cgi(controls.write_cgi, controls.client, LIGHT_SIREN_STATUS_COMMAND);
+        send_cgi(controls.write_cgi, controls.client, CAMERA_PARAMS_COMMAND);
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool contains_text(const unsigned char *payload, size_t size, const char *text) {
+    size_t text_size = strlen(text);
+    for (size_t i = 0; i + text_size <= size; ++i) {
+        if (memcmp(payload + i, text, text_size) == 0) return true;
+    }
+    return false;
+}
+
+static void report_control_reply(unsigned int command, const unsigned char *payload,
+                                 size_t length) {
+    int value = 0;
+    if (command == TRANS_COMMAND_RESPONSE && contains_text(payload, length, "cmd=2109;")) {
+        fputs("control_state", stderr);
+        if (parse_int_key(payload, length, "lightStatus", &value)) {
+            fprintf(stderr, " light=%d", value);
+        }
+        if (parse_int_key(payload, length, "sirenStatus", &value)) {
+            fprintf(stderr, " siren=%d", value);
+        }
+        if (parse_int_key(payload, length, "result", &value)) {
+            fprintf(stderr, " result=%d", value);
+        }
+        fputc('\n', stderr);
+        fflush(stderr);
+    } else if (command == CAMERA_PARAMS_RESPONSE) {
+        fputs("control_state", stderr);
+        if (parse_int_key(payload, length, "ircut", &value)) fprintf(stderr, " ircut=%d", value);
+        if (parse_int_key(payload, length, "night_vision_mode", &value)) {
+            fprintf(stderr, " night_vision_mode=%d", value);
+        }
+        fputc('\n', stderr);
+        fflush(stderr);
+    }
+}
+
+static void service_controls(client_read_fn client_read) {
+    if (controls.fd < 0) return;
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(controls.fd, &readable);
+    struct timeval no_wait = {0, 0};
+    if (select(controls.fd + 1, &readable, NULL, NULL, &no_wait) > 0) {
+        unsigned char request[2];
+        ssize_t received = read(controls.fd, request, sizeof(request));
+        if (received == (ssize_t)sizeof(request)) {
+            if (run_control(request[0], request[1])) {
+                controls.reply_deadline = time(NULL) + CONTROL_REPLY_SECONDS;
+            } else {
+                fprintf(stderr, "control_rejected op=%u\n", (unsigned int)request[0]);
+                fflush(stderr);
+            }
+        } else if (received == 0) {
+            /* The bridge closed its end: keep streaming, stop listening. */
+            close(controls.fd);
+            controls.fd = -1;
+        }
+    }
+    if (controls.reply_deadline == 0) return;
+    if (time(NULL) > controls.reply_deadline) {
+        controls.reply_deadline = 0;
+        return;
+    }
+    for (int poll = 0; poll < CONTROL_REPLY_POLLS; ++poll) {
+        unsigned int command = 0;
+        size_t length = 0;
+        if (!read_command_frame(client_read, controls.client, controls.buffer,
+                                MAX_COMMAND_BYTES, &command, &length)) break;
+        report_control_reply(command, controls.buffer, length);
+        memset(controls.buffer, 0, length);
+    }
+}
+
 /* Forward live video to stdout as Annex-B. H.264 frames are validated before
  * forwarding; H.265 frames (flagged in the frame header) are forwarded as
  * they are, so cameras that only encode H.265 still produce a stream. The
@@ -410,6 +574,7 @@ static bool forward_video_frames(client_read_fn client_read, void *client,
                                  unsigned int *last_frame_type) {
     *end_reason = STREAM_END_STOPPED;
     while (stream_running) {
+        service_controls(client_read);
         time_t deadline = time(NULL) + STREAM_TIMEOUT_SECONDS;
         unsigned char header[VIDEO_HEADER_BYTES];
         if (!read_client_exact(client_read, client, VIDEO_CHANNEL,
@@ -859,10 +1024,12 @@ int main(int argc, char **argv) {
                     signal(SIGPIPE, SIG_IGN);
                     signal(SIGINT, stop_streaming);
                     signal(SIGTERM, stop_streaming);
+                    open_control_channel(client_write_cgi, client);
                     h264_received = forward_video_frames(
                         client_read, client, &h264_frames, &h264_bytes,
                         &keyframe_seen, &h265_frames, &stream_end_reason,
                         &last_magic, &last_frame_type);
+                    close_control_channel();
                 } else {
                     h264_received = await_h264_frames(
                         client_read, client, &h264_frames, &h264_bytes,

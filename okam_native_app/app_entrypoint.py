@@ -39,6 +39,9 @@ from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
 DATA = Path("/data")
 VENDOR = DATA / "vendor"
 RUNTIME_ARCH = os.environ.get("OKAM_RUNTIME_ARCH", platform.machine()).lower()
+# Camera controls (light, siren, night vision) need the aarch64 helper; the
+# amd64 transport does not implement them yet.
+CONTROLS_SUPPORTED = RUNTIME_ARCH in ("arm64", "aarch64")
 if RUNTIME_ARCH in {"x86_64", "x64"}:
     RUNTIME_ARCH = "amd64"
 elif RUNTIME_ARCH in {"arm64", "armv8"}:
@@ -571,6 +574,7 @@ def _build_bridge(
             service_parameter,
             camera_password,
             environment=p2p_environment(),
+            controls=CONTROLS_SUPPORTED,
             **pc_client_fields(alias, device, client_id, options),
         )
 
@@ -586,6 +590,7 @@ def _build_bridge(
         api_token=api_token,
         session=session,
         ffmpeg=str(FFMPEG),
+        controls_supported=CONTROLS_SUPPORTED,
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -14,6 +15,40 @@ from .p2p import MAX_RESPONSE_BYTES, P2PError, _jpeg_dimensions
 
 
 StreamStarter = Callable[[], subprocess.Popen[bytes]]
+# Camera control operations understood by the aarch64 helper (one byte each).
+CONTROL_OPS = {"light": 1, "siren": 2, "night_vision": 3, "query": 4}
+# Night vision modes in the helper's value order.
+NIGHT_VISION_MODES = ("black_white", "full_color", "smart", "starlight")
+CONTROL_STATE_PREFIX = b"control_state"
+CONTROL_KEYS = frozenset({"light", "siren", "result", "ircut", "night_vision_mode"})
+
+
+def parse_control_state(line: bytes) -> dict[str, int]:
+    """Integer fields of one helper ``control_state`` line, others ignored."""
+
+    if not line.startswith(CONTROL_STATE_PREFIX + b" "):
+        return {}
+    values: dict[str, int] = {}
+    for item in line[len(CONTROL_STATE_PREFIX) + 1 :].split():
+        key, separator, value = item.partition(b"=")
+        name = key.decode("ascii", "ignore")
+        if not separator or name not in CONTROL_KEYS:
+            continue
+        try:
+            values[name] = int(value)
+        except ValueError:
+            continue
+    return values
+
+
+def night_vision_mode(ircut: int | None, mode: int | None) -> str | None:
+    """Name the camera's night vision mode from its reported parameters."""
+
+    if ircut == 0:
+        return "starlight"
+    if mode is not None and 0 <= mode < 3:
+        return NIGHT_VISION_MODES[mode]
+    return None
 LogSink = Callable[[str], None]
 _END = object()
 # Sanitized structural fields of the helper's final summary that are safe to
@@ -163,6 +198,82 @@ class NativeStreamSession:
         self._keyframe = b""
         self._codec: str | None = None
         self._closed = False
+        self._controls: dict[str, object] = {}
+        self._control_updates: dict[str, int] = {}
+        self._control_version = 0
+        self._control_changed = threading.Condition(self._lock)
+        self._stderr_line = bytearray()
+
+    def controls(self) -> dict[str, object]:
+        """The last camera control state reported, without waking the camera."""
+
+        with self._lock:
+            return dict(self._controls)
+
+    def control(self, name: str, value: object = None, *, timeout: float = 60.0) -> dict[str, object]:
+        """Send one camera control through the live session and await its state.
+
+        The camera is reached only through the session that streams video, so a
+        control never opens a second connection. Without a viewer, the session
+        starts for the request and then idles out like any other.
+        """
+
+        if name not in CONTROL_OPS:
+            raise P2PError("unknown camera control")
+        if name in ("light", "siren"):
+            if not isinstance(value, bool):
+                raise P2PError("camera control value is invalid")
+            operand = int(value)
+            watched = name
+        elif name == "night_vision":
+            if value not in NIGHT_VISION_MODES:
+                raise P2PError("camera control value is invalid")
+            operand = NIGHT_VISION_MODES.index(value)  # type: ignore[arg-type]
+            watched = "night_vision"
+        else:
+            operand = 0
+            watched = ""
+        subscription = self.acquire()
+        try:
+            with self._lock:
+                process = self._process
+                fd = getattr(process, "okam_control_fd", None)
+                if process is None or not isinstance(fd, int):
+                    raise P2PError("camera controls are unavailable")
+                before = self._control_version
+                try:
+                    os.write(fd, bytes((CONTROL_OPS[name], operand)))
+                except OSError:
+                    raise P2PError("camera control could not be sent") from None
+
+                def answered() -> bool:
+                    if watched:
+                        return self._control_updates.get(watched, 0) > before
+                    return self._control_version > before
+
+                if not self._control_changed.wait_for(answered, timeout=timeout):
+                    raise P2PError("camera did not confirm the control")
+                return dict(self._controls)
+        finally:
+            subscription.close()
+
+    def _note_control_line(self, line: bytes) -> None:
+        values = parse_control_state(line)
+        if not values:
+            return
+        self._control_version += 1
+        if "light" in values:
+            self._controls["light"] = values["light"] == 1
+            self._control_updates["light"] = self._control_version
+        if "siren" in values:
+            self._controls["siren"] = values["siren"] == 1
+            self._control_updates["siren"] = self._control_version
+        if "ircut" in values or "night_vision_mode" in values:
+            mode = night_vision_mode(values.get("ircut"), values.get("night_vision_mode"))
+            if mode is not None:
+                self._controls["night_vision"] = mode
+                self._control_updates["night_vision"] = self._control_version
+        self._control_changed.notify_all()
 
     def acquire(self) -> StreamSubscription:
         with self._lock:
@@ -346,6 +457,7 @@ class NativeStreamSession:
         self._scan.clear()
         self._sps = self._pps = self._vps = self._keyframe = b""
         self._codec = None
+        self._stderr_line.clear()
         process = self._starter()
         if process.stdout is None or process.stderr is None:
             process.kill()
@@ -390,6 +502,12 @@ class NativeStreamSession:
         finally:
             process.wait()
             stderr_thread.join(timeout=2)
+            control_fd = getattr(process, "okam_control_fd", None)
+            if isinstance(control_fd, int):
+                try:
+                    os.close(control_fd)
+                except OSError:
+                    pass
             with self._lock:
                 subscribers = tuple(self._subscribers.values())
                 self._subscribers.clear()
@@ -416,6 +534,12 @@ class NativeStreamSession:
                 remaining = MAX_RESPONSE_BYTES - len(self._stderr)
                 if remaining > 0:
                     self._stderr.extend(chunk[:remaining])
+                pending = self._stderr_line
+                pending.extend(chunk)
+                *lines, rest = bytes(pending).split(b"\n")
+                pending[:] = rest[-4096:]
+                for line in lines:
+                    self._note_control_line(line.strip())
 
     def _parse_summary_locked(self, returncode: int) -> None:
         payload = None

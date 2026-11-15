@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import struct
 import subprocess
@@ -728,11 +729,23 @@ def open_stream_process(
     environment: dict[str, str],
     account_user_id: str = "",
     virtual_uid: str = "",
+    controls: bool = False,
 ) -> subprocess.Popen[bytes]:
-    """Start the graceful raw-H.264 helper with all sensitive input on stdin."""
+    """Start the graceful raw-H.264 helper with all sensitive input on stdin.
+
+    With ``controls``, the helper also gets the read end of a pipe for camera
+    control requests; its write end is stored as ``okam_control_fd`` on the
+    returned process.
+    """
 
     stdin = _field(uid) + _field(service_parameter) + _field(device_password)
     stdin += _optional_user_id(account_user_id, virtual_uid)
+    control_read = control_write = -1
+    extra: dict[str, object] = {}
+    if controls:
+        control_read, control_write = os.pipe()
+        environment = {**environment, "OKAM_CONTROL_FD": str(control_read)}
+        extra["pass_fds"] = (control_read,)
     try:
         process = subprocess.Popen(
             [helper, library, "--stream-stdout"],
@@ -741,7 +754,13 @@ def open_stream_process(
             stderr=subprocess.PIPE,
             env=environment,
             bufsize=0,
+            **extra,  # type: ignore[arg-type]
         )
+        if controls:
+            os.close(control_read)
+            control_read = -1
+            process.okam_control_fd = control_write  # type: ignore[attr-defined]
+            control_write = -1
         assert process.stdin is not None
         assert process.stdout is not None
         assert process.stderr is not None
@@ -753,4 +772,7 @@ def open_stream_process(
         if "process" in locals() and process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+        for fd in (control_read, control_write):
+            if fd >= 0:
+                os.close(fd)
         raise P2PError("native H.264 stream helper failed") from None

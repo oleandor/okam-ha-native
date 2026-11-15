@@ -1,5 +1,5 @@
 name: O-KAM Native Bridge
-version: 1.3.0
+version: 1.4.0
 slug: okam_native
 description: Self-contained native O-KAM camera bridge for Home Assistant
 url: https://github.com/oleandor/okam-ha-native

@@ -139,6 +139,23 @@ Use:
 Do not use `localhost` for the bridge URL. With the `cabin` alias, a new
 installation creates `camera.cabin` unless that entity ID is already occupied.
 
+## Camera controls
+
+On `aarch64`, the integration also adds a **White light** switch, a **Siren**
+switch and a **Night vision** select (black and white, full color, smart or
+starlight, as in the O-KAM app).
+
+Controls use the camera's live session, so the bridge never holds a second
+connection to the camera. When nobody is watching, changing a control wakes
+the camera, starts its session, and lets it close after the idle timeout,
+which costs about as much battery as opening the live view briefly. Each
+switch shows the state the camera last confirmed; until it has confirmed one
+since the app started, Home Assistant marks the state as assumed. Reading the
+state never wakes the camera.
+
+Intercom (two-way audio) is not supported. Controls are not available on
+`amd64` yet.
+
 ## Operation
 
 A sleeping camera displays a sleeping image without waking it. Open live view

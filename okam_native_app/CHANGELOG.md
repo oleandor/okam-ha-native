@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0
+
+- Adds camera controls on `aarch64`: White light and Siren switches and a
+  Night vision select (black and white, full color, smart, starlight), using
+  the commands of the official O-KAM SDK. Controls go through the camera's
+  live session, so the bridge never opens a second connection, and reading
+  their state never wakes the camera.
+
 ## 1.3.0
 
 Community contributions from the forks of this repository, ported with the
