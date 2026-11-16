@@ -13,6 +13,22 @@ on:
       - "tools/fetch_official_sdk.py"
       - "docs/vendor-artifacts.json"
       - ".github/workflows/publish-image.yml"
+  # A release PR publishes its versioned image before it is merged. Home
+  # Assistant offers an update as soon as config.yaml on main carries the new
+  # version, so the image must already exist then; otherwise every update in
+  # the first minutes fails with "manifest unknown".
+  pull_request:
+    branches: [main]
+    paths:
+      - "okam_native_app/**"
+      - "src/okam_native/**"
+      - "native/android_compat/**"
+      - "native/hybris_probe/**"
+      - "native/hybris_connect/**"
+      - "native/amd64_connect/**"
+      - "tools/fetch_official_sdk.py"
+      - "docs/vendor-artifacts.json"
+      - ".github/workflows/publish-image.yml"
   workflow_dispatch:
     inputs:
       tag_suffix:
@@ -39,7 +55,10 @@ jobs:
     outputs:
       version: ${{ steps.app.outputs.version }}
       move_latest: ${{ steps.app.outputs.move_latest }}
+      should_build: ${{ steps.app.outputs.should_build }}
     steps:
+      # On a pull request this is the merge result GitHub would create, so the
+      # prebuilt image matches what main will contain.
       - uses: actions/checkout@v6
       - name: Read app version
         id: app
@@ -47,9 +66,22 @@ jobs:
         env:
           TAG_SUFFIX: ${{ inputs.tag_suffix }}
           REQUEST_LATEST: ${{ inputs.move_latest }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -eu
           base="$(sed -n 's/^version: //p' okam_native_app/config.yaml)"
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            # Only release PRs from this repository prebuild, and only when
+            # they change the app version. Fork PRs get no package access.
+            git fetch --quiet --depth=1 origin "$BASE_REF"
+            current="$(git show "origin/$BASE_REF:okam_native_app/config.yaml"               | sed -n 's/^version: //p')"
+            if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] || [ "$base" = "$current" ]; then
+              echo "No version change in this PR; nothing to prebuild."
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
           if [ -n "${TAG_SUFFIX:-}" ]; then
             echo "version=${base}-${TAG_SUFFIX}" >> "$GITHUB_OUTPUT"
           else
@@ -66,6 +98,7 @@ jobs:
 
   build:
     needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -104,6 +137,7 @@ jobs:
 
   publish:
     needs: [prepare, build]
+    if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
