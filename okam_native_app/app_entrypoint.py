@@ -33,6 +33,7 @@ from okam_native.p2p import (
     select_camera_password,
 )
 from okam_native.session import NativeStreamSession
+from okam_native.power import PowerMonitor, wake_service_query
 from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
 
 
@@ -578,11 +579,14 @@ def _build_bridge(
             **pc_client_fields(alias, device, client_id, options),
         )
 
+    log = lambda line: print(line, flush=True)  # noqa: E731
+    power = PowerMonitor(alias, wake_service_query(device.uid, credentials), log=log)
     session = NativeStreamSession(
         start_stream,
         idle_timeout=idle_timeout,
         name=alias,
-        log=lambda line: print(line, flush=True),
+        log=log,
+        on_ended=power.verify_sleep,
     )
     return CameraBridge(
         camera_id=alias,
@@ -591,6 +595,7 @@ def _build_bridge(
         session=session,
         ffmpeg=str(FFMPEG),
         controls_supported=CONTROLS_SUPPORTED,
+        power_state=power.current,
     )
 
 

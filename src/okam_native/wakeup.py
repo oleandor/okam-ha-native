@@ -89,7 +89,12 @@ async def _close(writer: asyncio.StreamWriter | None) -> None:
 
 
 async def _wake_via_port(
-    did: str, credentials: WakeCredentials, port: int, *, timeout: float
+    did: str,
+    credentials: WakeCredentials,
+    port: int,
+    *,
+    timeout: float,
+    wake: bool = True,
 ) -> tuple[bool, tuple[str, ...]]:
     directory_writer: asyncio.StreamWriter | None = None
     node_writer: asyncio.StreamWriter | None = None
@@ -109,11 +114,11 @@ async def _wake_via_port(
         node_reader, node_writer = await asyncio.wait_for(
             asyncio.open_connection(node_host, node_port), timeout=timeout
         )
-        for payload in (
-            {"event": "register"},
-            {"event": "toDevice", "did": did, "cmd": "wakeup"},
-            {"event": "getStatus", "did": did},
-        ):
+        payloads: list[dict[str, Any]] = [{"event": "register"}]
+        if wake:
+            payloads.append({"event": "toDevice", "did": did, "cmd": "wakeup"})
+        payloads.append({"event": "getStatus", "did": did})
+        for payload in payloads:
             node_writer.write(signed_message(payload, credentials))
         await node_writer.drain()
         deadline = asyncio.get_running_loop().time() + timeout
@@ -125,6 +130,8 @@ async def _wake_via_port(
             status = response.get("status") or response.get("deviceStatus") or response.get("event")
             if isinstance(status, str) and status not in {"register", "timeout"}:
                 states.append(status)
+                if not wake:
+                    break
             if status == "activation" or response.get("event") == "online":
                 break
         return True, tuple(states)
@@ -155,3 +162,48 @@ async def wake_camera(did: str, credentials: WakeCredentials, *, timeout: float 
     if not requested:
         raise WakeError("camera was not registered with the official wake service")
     return WakeResult(True, tuple(states), responsive)
+
+
+# The wake service's names for a low-power camera's state, as the official SDK
+# maps them, and the names the bridge reports.
+POWER_STATES = {
+    "activation": "awake",
+    "online": "awake",
+    "sleep": "sleeping",
+    "ULPC": "deep_sleep",
+    "ULPC2": "micro_power",
+    "offline": "offline",
+    "power_off": "powered_off",
+    "LBS": "low_battery_off",
+}
+
+
+async def query_power_state(
+    did: str, credentials: WakeCredentials, *, timeout: float = 8.0
+) -> str | None:
+    """Ask the wake service whether the camera sleeps, without waking it.
+
+    Sends only the service's status request; the camera itself is not
+    contacted. Returns one of the POWER_STATES values, or None if no server
+    reported a known state.
+    """
+
+    if not did or len(did) > 256:
+        raise WakeError("camera device identifier is invalid")
+    outcomes = await asyncio.gather(
+        *(
+            _wake_via_port(did, credentials, port, timeout=timeout, wake=False)
+            for port in WAKE_PORTS
+        ),
+        return_exceptions=True,
+    )
+    reported: list[str] = []
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            continue
+        _sent, states = outcome
+        reported.extend(POWER_STATES[state] for state in states if state in POWER_STATES)
+    if not reported:
+        return None
+    # A camera seen awake by either server is awake.
+    return "awake" if "awake" in reported else reported[0]

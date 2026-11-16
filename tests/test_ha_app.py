@@ -253,7 +253,7 @@ def test_integration_exposes_camera_controls_only_when_supported() -> None:
     controls = (component / "controls.py").read_text(encoding="utf-8")
     api = (component / "api.py").read_text(encoding="utf-8")
 
-    assert 'PLATFORMS = ["camera", "switch", "select"]' in constants
+    assert 'PLATFORMS = ["camera", "switch", "select", "sensor"]' in constants
     for platform in (switch, select):
         assert "if controls_supported(runtime):" in platform
     assert '_control_key = "light"' in switch
@@ -280,3 +280,15 @@ def test_release_creation_is_automated_and_guarded() -> None:
     assert 'gh release view "v$VERSION"' in workflow
     # Creating a release needs write access the workflow does not grant by default.
     assert "contents: write" in workflow
+
+
+def test_battery_and_power_sensors_match_the_bridge() -> None:
+    import re
+
+    from okam_native.wakeup import POWER_STATES
+
+    sensor = (ROOT / "custom_components" / "okam" / "sensor.py").read_text(encoding="utf-8")
+    listed = re.findall(r'^    "([a-z_]+)",$', sensor, re.MULTILINE)
+    assert sorted(set(POWER_STATES.values())) == sorted(listed)
+    assert 'self.coordinator.data.get("battery_percent")' in sensor
+    assert 'self.coordinator.data.get("power_state")' in sensor

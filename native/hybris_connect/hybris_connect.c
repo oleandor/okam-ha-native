@@ -413,12 +413,17 @@ static bool is_h265_frame(const unsigned char *header) {
 #define CONTROL_OP_SIREN 2U
 #define CONTROL_OP_NIGHT_VISION 3U
 #define CONTROL_OP_QUERY 4U
+#define CONTROL_OP_STATUS 5U
 #define CONTROL_REPLY_SECONDS 6
 #define CONTROL_REPLY_POLLS 4
 #define TRANS_COMMAND_RESPONSE 24785U
 #define CAMERA_PARAMS_RESPONSE 24579U
 #define LIGHT_SIREN_STATUS_COMMAND "trans_cmd_string.cgi?cmd=2109&command=2&"
 #define CAMERA_PARAMS_COMMAND "get_camera_params.cgi?"
+/* The camera status the official app reads; it carries batteryRate and
+ * isCharge on battery cameras. Read-only. */
+#define CAMERA_STATUS_COMMAND "get_status.cgi?"
+#define CAMERA_STATUS_RESPONSE 24577U
 
 typedef struct {
     int fd;
@@ -486,6 +491,9 @@ static bool run_control(unsigned int op, unsigned int value) {
         send_cgi(controls.write_cgi, controls.client, LIGHT_SIREN_STATUS_COMMAND);
         send_cgi(controls.write_cgi, controls.client, CAMERA_PARAMS_COMMAND);
         return true;
+    case CONTROL_OP_STATUS:
+        send_cgi(controls.write_cgi, controls.client, CAMERA_STATUS_COMMAND);
+        return true;
     default:
         return false;
     }
@@ -512,6 +520,14 @@ static void report_control_reply(unsigned int command, const unsigned char *payl
         }
         if (parse_int_key(payload, length, "result", &value)) {
             fprintf(stderr, " result=%d", value);
+        }
+        fputc('\n', stderr);
+        fflush(stderr);
+    } else if (command == CAMERA_STATUS_RESPONSE &&
+               parse_int_key(payload, length, "batteryRate", &value)) {
+        fprintf(stderr, "control_state battery=%d", value);
+        if (parse_int_key(payload, length, "isCharge", &value)) {
+            fprintf(stderr, " charging=%d", value);
         }
         fputc('\n', stderr);
         fflush(stderr);

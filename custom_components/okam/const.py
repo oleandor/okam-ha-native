@@ -1,7 +1,7 @@
 """Constants for the O-KAM Native Bridge integration."""
 
 DOMAIN = "okam"
-PLATFORMS = ["camera", "switch", "select"]
+PLATFORMS = ["camera", "switch", "select", "sensor"]
 
 CONF_BRIDGE_URL = "bridge_url"
 CONF_API_TOKEN = "api_token"

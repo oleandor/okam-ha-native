@@ -16,11 +16,13 @@ from .p2p import MAX_RESPONSE_BYTES, P2PError, _jpeg_dimensions
 
 StreamStarter = Callable[[], subprocess.Popen[bytes]]
 # Camera control operations understood by the aarch64 helper (one byte each).
-CONTROL_OPS = {"light": 1, "siren": 2, "night_vision": 3, "query": 4}
+CONTROL_OPS = {"light": 1, "siren": 2, "night_vision": 3, "query": 4, "status": 5}
 # Night vision modes in the helper's value order.
 NIGHT_VISION_MODES = ("black_white", "full_color", "smart", "starlight")
 CONTROL_STATE_PREFIX = b"control_state"
-CONTROL_KEYS = frozenset({"light", "siren", "result", "ircut", "night_vision_mode"})
+CONTROL_KEYS = frozenset(
+    {"light", "siren", "result", "ircut", "night_vision_mode", "battery", "charging"}
+)
 
 
 def parse_control_state(line: bytes) -> dict[str, int]:
@@ -174,8 +176,10 @@ class NativeStreamSession:
         media_timeout: float = 90.0,
         name: str = "",
         log: LogSink | None = None,
+        on_ended: Callable[[], None] | None = None,
     ) -> None:
         self._starter = starter
+        self._on_ended = on_ended
         self.idle_timeout = idle_timeout
         # A helper that never delivers H.264 would otherwise hold its viewers
         # (and the camera) forever, because a viewer only notices it has gone
@@ -257,6 +261,21 @@ class NativeStreamSession:
         finally:
             subscription.close()
 
+    @staticmethod
+    def _request_status(process: subprocess.Popen[bytes]) -> None:
+        """Ask the camera for its status (battery) once per live session.
+
+        The session is already open for video, so this costs no extra wake.
+        """
+
+        fd = getattr(process, "okam_control_fd", None)
+        if not isinstance(fd, int):
+            return
+        try:
+            os.write(fd, bytes((CONTROL_OPS["status"], 0)))
+        except OSError:
+            pass
+
     def _note_control_line(self, line: bytes) -> None:
         values = parse_control_state(line)
         if not values:
@@ -268,6 +287,11 @@ class NativeStreamSession:
         if "siren" in values:
             self._controls["siren"] = values["siren"] == 1
             self._control_updates["siren"] = self._control_version
+        if "battery" in values and 0 <= values["battery"] <= 100:
+            self._controls["battery"] = values["battery"]
+            self._control_updates["battery"] = self._control_version
+        if "charging" in values:
+            self._controls["charging"] = values["charging"] == 1
         if "ircut" in values or "night_vision_mode" in values:
             mode = night_vision_mode(values.get("ircut"), values.get("night_vision_mode"))
             if mode is not None:
@@ -487,9 +511,12 @@ class NativeStreamSession:
                 if not chunk:
                     break
                 with self._lock:
+                    first_media = not self._media_ready
                     self._media_ready = True
                     self._note_media(chunk)
                     subscribers = tuple(self._subscribers.values())
+                if first_media:
+                    self._request_status(process)
                 for chunks in subscribers:
                     try:
                         chunks.put_nowait(chunk)
@@ -514,6 +541,11 @@ class NativeStreamSession:
                 if self._process is process:
                     self._process = None
                 self._parse_summary_locked(process.returncode)
+            if self._on_ended is not None:
+                try:
+                    self._on_ended()
+                except Exception:  # noqa: BLE001 - a hook must not break the pump
+                    pass
             for chunks in subscribers:
                 try:
                     chunks.put_nowait(_END)

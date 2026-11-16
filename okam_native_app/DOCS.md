@@ -156,6 +156,26 @@ state never wakes the camera.
 Intercom (two-way audio) is not supported. Controls are not available on
 `amd64` yet.
 
+## Battery and sleep
+
+The integration adds a **Battery** sensor and a **Power state** sensor. The
+camera reports its battery level only while it is awake, so the sensor updates
+whenever the camera is viewed or controlled and otherwise keeps its last
+value. The power state comes from the O-KAM wake service and never wakes the
+camera; it is refreshed every few minutes.
+
+After each live session the log shows whether the camera went back to sleep:
+
+```text
+camera_power camera=cabin state=sleeping after_seconds=30 asleep=true
+```
+
+A battery camera only drains fast while it is awake. The usual causes are a
+dashboard card with `camera_view: live` left open (a wall tablet, for example),
+because it keeps the stream and the camera running, and Home Assistant's
+**Preload camera stream** option. Prefer `camera_view: auto` for battery
+cameras.
+
 ## Operation
 
 A sleeping camera displays a sleeping image without waking it. Open live view
