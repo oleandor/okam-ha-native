@@ -30,7 +30,8 @@ The project contains both required parts:
 - An O-KAM Pro camera that works in the O-KAM mobile app
 - An O-KAM account that can view the camera; the account may own the camera
   or have it shared to it. Several cameras on one account are supported.
-- HACS for the easiest integration installation, or access to
+- The Home Assistant **Marketplace** (Home Assistant 2026.11 or later; HACS on
+  older versions) for the easiest integration installation, or access to
   `/config/custom_components` for manual installation
 
 The app is published as one multi-architecture image:
@@ -105,13 +106,19 @@ This is not the O-KAM account password.
 
 ### 3. Install the Home Assistant integration
 
-#### Recommended: HACS
+#### Recommended: Marketplace
 
-1. Open **HACS** in Home Assistant.
+Since Home Assistant 2026.11, HACS is built in as the **Marketplace** under
+**Settings**. An integration installed through HACS before moves to the
+Marketplace by itself. On older Home Assistant versions, use HACS the same
+way.
+
+1. Open **Settings → Marketplace**.
 2. Add `https://github.com/oleandor/okam-ha-native` as a custom repository of
-   type **Integration**.
+   type **Integration**. Adding a custom repository may ask you to connect a
+   GitHub account.
 3. Find and install **O-KAM Native Bridge**.
-4. Restart Home Assistant when HACS asks you to.
+4. Restart Home Assistant when asked.
 
 #### Manual installation
 
@@ -166,10 +173,17 @@ delay** from `30` to `120`. The change is applied immediately.
 ## Updating
 
 - Update the **app** from **Settings → Apps**.
-- Update the **integration** from HACS.
+- Update the **integration** from the **Marketplace** (HACS before Home
+  Assistant 2026.11).
 - Restart Home Assistant after an integration update.
 
-The two components use the same release version.
+The two components use the same release version, but they update
+separately: the app store and the Marketplace each check for new releases on
+their own schedule, so for a while after a release the app can show the new
+version while the integration still shows the previous one. The previous
+integration keeps working with the new app; it only lacks the new features.
+To check right away, open the integration in the Marketplace and refresh its
+update information from its menu.
 
 ## Supported cameras
 
@@ -217,7 +231,8 @@ problems.
 
 1. Remove **O-KAM Native Bridge** from **Settings → Devices & services**.
 2. Stop and uninstall the **O-KAM Native Bridge** app.
-3. Optionally remove the custom repositories from HACS and the app store.
+3. Optionally remove the custom repositories from the Marketplace and the app
+   store.
 4. Optionally remove the camera from the O-KAM account used by the bridge.
 
 ## Security

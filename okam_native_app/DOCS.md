@@ -124,7 +124,8 @@ It should report `camera_ready: true` and `phase: bridge_ready` while idle.
 
 ## Home Assistant integration
 
-Install **O-KAM Native Bridge** from HACS using
+Install **O-KAM Native Bridge** from the **Marketplace** (**Settings →
+Marketplace**; HACS before Home Assistant 2026.11) using
 `https://github.com/oleandor/okam-ha-native` as a custom integration repository.
 Restart Home Assistant, then add the integration from **Settings → Devices &
 services**.
