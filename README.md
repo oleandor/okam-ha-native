@@ -28,8 +28,8 @@ The project contains both required parts:
 
 - A Home Assistant system reporting the `aarch64` or `amd64` architecture
 - An O-KAM Pro camera that works in the O-KAM mobile app
-- An O-KAM account that can view exactly one camera; the account may own the
-  camera or have it shared to it
+- An O-KAM account that can view the camera; the account may own the camera
+  or have it shared to it. Several cameras on one account are supported.
 - HACS for the easiest integration installation, or access to
   `/config/custom_components` for manual installation
 
@@ -170,6 +170,24 @@ delay** from `30` to `120`. The change is applied immediately.
 - Restart Home Assistant after an integration update.
 
 The two components use the same release version.
+
+## Supported cameras
+
+What has been verified, and what has not:
+
+| Camera and host | Status |
+| --- | --- |
+| O-KAM Pro battery camera, `aarch64` (Raspberry Pi 4) | Verified: live view, snapshots, wake and sleep |
+| Other O-KAM Pro cameras, `aarch64` | Expected to work; reports welcome |
+| Any camera, `amd64` | Account, wake and connection work. Video does not start for every camera yet |
+| Cameras with a virtual device ID that the resolver reports as inactive | Not supported yet |
+| Multi-lens models, other brands using the O-KAM app | Untested; `pc_client_live_start` may help on `aarch64` |
+| SD card playback, intercom (two-way audio) | Not supported |
+
+When you report a problem, please include the architecture, the app version,
+and these lines from the app log, with any device IDs and IP addresses
+removed: `native_loader_ready`, `account_enumerated`, `startup_ready`,
+`stream_starting` and `stream_ended`.
 
 ## Diagnostics
 
