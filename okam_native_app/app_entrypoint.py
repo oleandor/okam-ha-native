@@ -40,7 +40,7 @@ from okam_native.wakeup import WakeError, load_wake_credentials, wake_camera
 DATA = Path("/data")
 VENDOR = DATA / "vendor"
 RUNTIME_ARCH = os.environ.get("OKAM_RUNTIME_ARCH", platform.machine()).lower()
-# Camera controls (light, siren, night vision) need the aarch64 helper; the
+# Camera controls (light, night vision) need the aarch64 helper; the
 # amd64 transport does not implement them yet.
 CONTROLS_SUPPORTED = RUNTIME_ARCH in ("arm64", "aarch64")
 if RUNTIME_ARCH in {"x86_64", "x64"}:

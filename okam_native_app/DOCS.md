@@ -141,8 +141,8 @@ installation creates `camera.cabin` unless that entity ID is already occupied.
 
 ## Camera controls
 
-On `aarch64`, the integration also adds a **White light** switch, a **Siren**
-switch and a **Night vision** select (black and white, full color, smart or
+On `aarch64`, the integration also adds a **White light** switch and a
+**Night vision** select (black and white, full color, smart or
 starlight, as in the O-KAM app).
 
 Controls use the camera's live session, so the bridge never holds a second

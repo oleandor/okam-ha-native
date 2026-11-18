@@ -1,4 +1,4 @@
-"""White light and siren switches for the O-KAM camera."""
+"""White light switch for the O-KAM camera."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ async def async_setup_entry(
 ) -> None:
     runtime = entry.runtime_data
     if controls_supported(runtime):
-        async_add_entities([OkamWhiteLight(runtime), OkamSiren(runtime)])
+        async_add_entities([OkamWhiteLight(runtime)])
 
 
 class _OkamControlSwitch(OkamControlEntity, SwitchEntity):
@@ -40,9 +40,3 @@ class OkamWhiteLight(_OkamControlSwitch):
     _control_key = "light"
     _attr_name = "White light"
     _attr_icon = "mdi:lightbulb-spot"
-
-
-class OkamSiren(_OkamControlSwitch):
-    _control_key = "siren"
-    _attr_name = "Siren"
-    _attr_icon = "mdi:alarm-light"

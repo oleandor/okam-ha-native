@@ -293,7 +293,7 @@ def make_handler(
                 return
             if body == {"refresh": True}:
                 name, value = "query", None
-            elif len(body) == 1 and next(iter(body)) in ("light", "siren", "night_vision"):
+            elif len(body) == 1 and next(iter(body)) in ("light", "night_vision"):
                 name, value = next(iter(body.items()))
             else:
                 self._json(400, {"error": "invalid_request"})

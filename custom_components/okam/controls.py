@@ -1,4 +1,4 @@
-"""Shared helpers for the camera control entities (light, siren, night vision)."""
+"""Shared helpers for the camera control entities (light, night vision)."""
 
 from __future__ import annotations
 

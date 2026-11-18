@@ -1,4 +1,4 @@
-"""Camera controls (light, siren, night vision) through the live session."""
+"""Camera controls (light, night vision) through the live session."""
 
 import os
 import threading
@@ -38,9 +38,10 @@ class ControlledProcess(FakeProcess):
 
 
 def test_control_state_lines_keep_only_known_integer_fields() -> None:
+    # The helper's status line also carries the siren state, which the bridge
+    # does not control and ignores.
     assert parse_control_state(b"control_state light=1 siren=0 result=0") == {
         "light": 1,
-        "siren": 0,
         "result": 0,
     }
     assert parse_control_state(b"control_state ircut=0 night_vision_mode=2") == {
@@ -74,18 +75,18 @@ def test_light_control_is_sent_through_the_live_session() -> None:
     finally:
         viewer.close()
         session.close()
-    assert state == {"light": True, "siren": False}
+    assert state == {"light": True}
     assert process.requests == [(1, 1)]
     # The control reused the viewer's session instead of opening another.
     assert len(starts) == 1
 
 
 def test_control_without_a_viewer_starts_the_session_and_lets_it_idle_out() -> None:
-    process = ControlledProcess({2: b"control_state light=0 siren=1 result=0\n"})
+    process = ControlledProcess({1: b"control_state light=0 siren=0 result=0\n"})
     session = NativeStreamSession(lambda: process, idle_timeout=0.05)  # type: ignore[arg-type]
     try:
-        assert session.control("siren", True, timeout=2)["siren"] is True
-        assert process.requests == [(2, 1)]
+        assert session.control("light", False, timeout=2)["light"] is False
+        assert process.requests == [(1, 0)]
         assert _wait_until(lambda: not session.status().running)
     finally:
         session.close()
@@ -108,7 +109,7 @@ def test_invalid_controls_never_reach_the_camera() -> None:
     try:
         for name, value in (
             ("light", 1),
-            ("siren", "on"),
+            ("siren", True),
             ("night_vision", "infrared"),
             ("reboot", True),
         ):
@@ -172,7 +173,7 @@ class ControlSession:
     def control(self, name: str, value: object = None) -> dict[str, object]:
         if name == "night_vision" and value == "infrared":
             raise P2PError("camera control value is invalid")
-        if name == "siren":
+        if name == "night_vision" and value == "smart":
             raise P2PError("camera did not confirm the control")
         self.sent.append((name, value))
         if name != "query":
@@ -219,12 +220,15 @@ def test_control_api_is_authenticated_and_validated() -> None:
         assert request(server, "POST", path, token=token, body={"refresh": True})[0] == 200
         assert request(server, "POST", path, token=token, body={"reboot": True})[0] == 400
         assert request(
-            server, "POST", path, token=token, body={"light": True, "siren": True}
+            server, "POST", path, token=token, body={"light": True, "night_vision": "smart"}
         )[0] == 400
         assert request(
             server, "POST", path, token=token, body={"night_vision": "infrared"}
         )[0] == 400
-        code, _, payload = request(server, "POST", path, token=token, body={"siren": True})
+        assert request(server, "POST", path, token=token, body={"siren": True})[0] == 400
+        code, _, payload = request(
+            server, "POST", path, token=token, body={"night_vision": "smart"}
+        )
         assert code == 504 and json.loads(payload) == {"error": "control_failed"}
         code, _, payload = request(server, "GET", path, token=token)
         assert code == 200 and json.loads(payload) == {"light": True}
