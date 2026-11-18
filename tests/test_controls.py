@@ -260,3 +260,34 @@ def test_control_api_is_refused_where_the_helper_has_no_controls() -> None:
     finally:
         server.shutdown()
     assert session.sent == []
+
+
+class TwoReplyProcess(ControlledProcess):
+    """Answers a query like the camera: light first, night vision later."""
+
+    def _serve(self, read_end: int) -> None:
+        import time
+
+        with os.fdopen(read_end, "rb", buffering=0) as pipe:
+            while True:
+                request = pipe.read(2)
+                if len(request) < 2:
+                    return
+                self.requests.append((request[0], request[1]))
+                if request[0] == 4:
+                    self.stderr.chunks.put(b"control_state light=0 siren=0 result=0\n")
+                    time.sleep(0.2)
+                    self.stderr.chunks.put(b"control_state ircut=1 night_vision_mode=0\n")
+
+
+def test_refresh_waits_for_every_reply_of_the_query() -> None:
+    process = TwoReplyProcess({})
+    session = NativeStreamSession(lambda: process, idle_timeout=60)  # type: ignore[arg-type]
+    try:
+        state = session.control("query", timeout=2)
+    finally:
+        session.close()
+    # On hardware the refresh returned after the first reply, without the
+    # night vision mode.
+    assert state == {"light": False, "night_vision": "black_white"}
+    assert process.requests == [(4, 0)]
