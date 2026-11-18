@@ -292,3 +292,20 @@ def test_battery_and_power_sensors_match_the_bridge() -> None:
     assert sorted(set(POWER_STATES.values())) == sorted(listed)
     assert 'self.coordinator.data.get("battery_percent")' in sensor
     assert 'self.coordinator.data.get("power_state")' in sensor
+
+
+def test_release_pr_publishes_its_image_before_the_merge() -> None:
+    # Home Assistant offers an update as soon as config.yaml on main carries a
+    # new version. The 1.3.0 image was still building then, so every update in
+    # the first minutes failed with "[404] manifest unknown".
+    workflow = (ROOT / ".github" / "workflows" / "publish-image.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "  pull_request:\n    branches: [main]" in workflow
+    # Only a version change from this repository prebuilds anything.
+    assert 'if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] || [ "$base" = "$current" ]; then' in workflow
+    assert workflow.count("if: needs.prepare.outputs.should_build == 'true'") == 2
+    # A PR build must never move latest or create a release: both stay
+    # behind the main-only guard.
+    assert '[ "${GITHUB_REF}" = "refs/heads/main" ]' in workflow
+    assert "if: needs.prepare.outputs.move_latest == 'true'" in workflow
