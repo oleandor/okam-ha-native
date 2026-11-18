@@ -76,8 +76,12 @@ class CameraBridge:
         api_token: str,
         session: NativeStreamSession,
         ffmpeg: str,
+        controls_supported: bool = False,
+        power_state: Callable[[], str | None] | None = None,
     ) -> None:
         self.camera_id = camera_id
+        self.controls_supported = controls_supported
+        self._power_state = power_state
         self.camera_name = camera_name
         self._api_token = api_token
         # Derived rather than random so it survives an app restart: Home
@@ -109,6 +113,12 @@ class CameraBridge:
             state = "streaming" if session.media_ready else "waking"
         else:
             state = "idle"
+        controls = self.session.controls() if self.controls_supported else {}
+        battery = controls.pop("battery", None)
+        charging = controls.pop("charging", None)
+        power = "awake" if session.running else (
+            self._power_state() if self._power_state is not None else None
+        )
         return {
             "camera_id": self.camera_id,
             "name": self.camera_name,
@@ -117,13 +127,16 @@ class CameraBridge:
             "viewers": session.viewers,
             "media_ready": session.media_ready,
             "idle_timeout_seconds": int(self.session.idle_timeout),
-            "battery_percent": None,
+            "battery_percent": battery,
+            "power_state": power,
             "signal_dbm": None,
             "last_event": None,
             "pir_motion": None,
-            "charging": None,
+            "charging": charging,
             "clean_disconnect": session.clean_disconnect,
             "last_error": session.last_error,
+            "controls_supported": self.controls_supported,
+            "controls": controls,
         }
 
 
@@ -230,6 +243,8 @@ def make_handler(
                 self._json(200, bridge.status())
             elif route[1] == "/snapshot.jpg":
                 self._snapshot(bridge)
+            elif route[1] == "/controls":
+                self._json(200, bridge.session.controls() if bridge.controls_supported else {})
             elif route[1] == "/stream/source":
                 self._json(200, {"stream_url": bridge.stream_url(self.headers.get("Host"))})
             else:
@@ -264,8 +279,30 @@ def make_handler(
                 if self._request_json() is None:
                     return
                 self._json(200, {"stopped": True})
+            elif action == "/controls":
+                self._control(bridge)
             else:
                 self._json(404, {"error": "not_found"})
+
+        def _control(self, bridge: CameraBridge) -> None:
+            body = self._request_json()
+            if body is None:
+                return
+            if not bridge.controls_supported:
+                self._json(501, {"error": "controls_unsupported"})
+                return
+            if body == {"refresh": True}:
+                name, value = "query", None
+            elif len(body) == 1 and next(iter(body)) in ("light", "night_vision"):
+                name, value = next(iter(body.items()))
+            else:
+                self._json(400, {"error": "invalid_request"})
+                return
+            try:
+                self._json(200, bridge.session.control(name, value))
+            except P2PError as error:
+                status = 400 if "invalid" in str(error) or "unknown" in str(error) else 504
+                self._json(status, {"error": "control_failed"})
 
         def _api_authenticated(self, bridges: Mapping[str, CameraBridge]) -> bool:
             # Every bridge in one app shares the same user-created API token.
