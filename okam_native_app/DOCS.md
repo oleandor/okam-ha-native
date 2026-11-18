@@ -133,7 +133,8 @@ It should report `camera_ready: true` and `phase: bridge_ready` while idle.
 
 ## Home Assistant integration
 
-Install **O-KAM Native Bridge** from HACS using
+Install **O-KAM Native Bridge** from the **Marketplace** (**Settings →
+Marketplace**; HACS before Home Assistant 2026.11) using
 `https://github.com/oleandor/okam-ha-native` as a custom integration repository.
 Restart Home Assistant, then add the integration from **Settings → Devices &
 services**.
@@ -147,6 +148,43 @@ Use:
 
 Do not use `localhost` for the bridge URL. With the `cabin` alias, a new
 installation creates `camera.cabin` unless that entity ID is already occupied.
+
+## Camera controls
+
+On `aarch64`, the integration also adds a **White light** switch and a
+**Night vision** select (black and white, full color, smart or
+starlight, as in the O-KAM app).
+
+Controls use the camera's live session, so the bridge never holds a second
+connection to the camera. When nobody is watching, changing a control wakes
+the camera, starts its session, and lets it close after the idle timeout,
+which costs about as much battery as opening the live view briefly. Each
+switch shows the state the camera last confirmed; until it has confirmed one
+since the app started, Home Assistant marks the state as assumed. Reading the
+state never wakes the camera.
+
+Intercom (two-way audio) is not supported. Controls are not available on
+`amd64` yet.
+
+## Battery and sleep
+
+The integration adds a **Battery** sensor and a **Power state** sensor. The
+camera reports its battery level only while it is awake, so the sensor updates
+whenever the camera is viewed or controlled and otherwise keeps its last
+value. The power state comes from the O-KAM wake service and never wakes the
+camera; it is refreshed every few minutes.
+
+After each live session the log shows whether the camera went back to sleep:
+
+```text
+camera_power camera=cabin state=sleeping after_seconds=30 asleep=true
+```
+
+A battery camera only drains fast while it is awake. The usual causes are a
+dashboard card with `camera_view: live` left open (a wall tablet, for example),
+because it keeps the stream and the camera running, and Home Assistant's
+**Preload camera stream** option. Prefer `camera_view: auto` for battery
+cameras.
 
 ## Operation
 

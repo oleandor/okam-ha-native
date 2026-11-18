@@ -9,7 +9,7 @@ add-on in every way that would otherwise collide:
 | Slug | `okam_native` | `okam_native_test` |
 | Host port | 8099 | 8098 |
 | Start on boot | auto | manual |
-| Image tag | the released version | `1.3.0-test1` |
+| Image tag | the released version | `1.4.0-test1` |
 
 Because the slug and port differ, both can be installed at once, and removing
 this one leaves the installed add-on untouched.
