@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.2
+
+- Adds an icon for the integration and the app. Home Assistant 2026.3 and
+  later show it in notifications, on the integration card and in the app
+  store, instead of an "icon not available" placeholder.
+
 ## 1.4.1
 
 - Supports O-KAM accounts in the account service's second region, which
