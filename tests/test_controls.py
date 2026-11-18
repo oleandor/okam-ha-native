@@ -285,5 +285,5 @@ def test_refresh_waits_for_every_reply_of_the_query() -> None:
         session.close()
     # On hardware the refresh returned after the first reply, without the
     # night vision mode.
-    assert state == {"light": False, "night_vision": "black_white"}
+    assert state == {"light": False, "siren": False, "night_vision": "black_white"}
     assert process.requests == [(4, 0)]
