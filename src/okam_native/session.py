@@ -16,12 +16,12 @@ from .p2p import MAX_RESPONSE_BYTES, P2PError, _jpeg_dimensions
 
 StreamStarter = Callable[[], subprocess.Popen[bytes]]
 # Camera control operations understood by the aarch64 helper (one byte each).
-CONTROL_OPS = {"light": 1, "night_vision": 3, "query": 4, "status": 5}
+CONTROL_OPS = {"light": 1, "siren": 2, "night_vision": 3, "query": 4, "status": 5}
 # Night vision modes in the helper's value order.
 NIGHT_VISION_MODES = ("black_white", "full_color", "smart", "starlight")
 CONTROL_STATE_PREFIX = b"control_state"
 CONTROL_KEYS = frozenset(
-    {"light", "result", "ircut", "night_vision_mode", "battery", "charging"}
+    {"light", "siren", "result", "ircut", "night_vision_mode", "battery", "charging"}
 )
 
 
@@ -224,7 +224,7 @@ class NativeStreamSession:
 
         if name not in CONTROL_OPS:
             raise P2PError("unknown camera control")
-        if name == "light":
+        if name in ("light", "siren"):
             if not isinstance(value, bool):
                 raise P2PError("camera control value is invalid")
             operand = int(value)
@@ -290,6 +290,9 @@ class NativeStreamSession:
         if "light" in values:
             self._controls["light"] = values["light"] == 1
             self._control_updates["light"] = self._control_version
+        if "siren" in values:
+            self._controls["siren"] = values["siren"] == 1
+            self._control_updates["siren"] = self._control_version
         if "battery" in values and 0 <= values["battery"] <= 100:
             self._controls["battery"] = values["battery"]
             self._control_updates["battery"] = self._control_version
