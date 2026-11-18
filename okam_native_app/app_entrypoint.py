@@ -293,8 +293,10 @@ def enumerate_account() -> list[tuple[str, AccountDevice]]:
         set_status(configuration_required=True)
         return []
     set_status(phase="enumerating_account", configuration_required=False)
+    region = options.get("account_region") or "auto"
+    client = Eye4AccountClient(region=region if isinstance(region, str) else "")
     try:
-        devices = Eye4AccountClient().enumerate(username, password)
+        devices = client.enumerate(username, password)
     finally:
         username = ""
         password = ""
@@ -306,7 +308,7 @@ def enumerate_account() -> list[tuple[str, AccountDevice]]:
         phase="account_enumerated",
     )
     print(
-        f"account_enumerated=true device_count={len(devices)} "
+        f"account_enumerated=true region={client.region} device_count={len(devices)} "
         f"camera_count={len(cameras)} "
         f"aliases={','.join(alias for alias, _device in cameras)}",
         flush=True,

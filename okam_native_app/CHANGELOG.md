@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Supports O-KAM accounts in the account service's second region, which
+  accounts from some countries, for example in Latin America, use. The new
+  optional `account_region` option defaults to `auto`: the app tries region 1,
+  then region 2. Before, such accounts failed at startup with `AccountError`,
+  for example `step=summary ... http_status=404` (#23, #24).
+
 ## 1.3.0
 
 Community contributions from the forks of this repository, ported with the
