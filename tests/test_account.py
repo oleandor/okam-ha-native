@@ -130,3 +130,102 @@ def test_enumerated_devices_carry_the_account_user_id_privately() -> None:
     device = Eye4AccountClient(opener=opener).enumerate("viewer@example.com", "password")[0]
     assert device.account_user_id == "123456789"
     assert "123456789" not in repr(device)
+
+
+def _region_opener(working_host: str, missing_status: int = 404):
+    """An account service that knows the account only on ``working_host``."""
+
+    import urllib.error
+
+    hosts: list[str] = []
+
+    def opener(request, _timeout: float) -> bytes:
+        url = urlsplit(request.full_url)
+        hosts.append(url.hostname or "")
+        if url.hostname != working_host:
+            raise urllib.error.HTTPError(request.full_url, missing_status, "missing", {}, None)
+        if url.path == "/user/summary":
+            return json.dumps({"userid": 123456789}).encode()
+        if url.path == "/login/token":
+            return json.dumps({"token": "opaque-token"}).encode()
+        return json.dumps([{"uid": "device-id", "nickname": "Cabin", "password": "x"}]).encode()
+
+    return opener, hosts
+
+
+def test_auto_region_falls_back_to_the_second_region() -> None:
+    from okam_native.account import ACCOUNT_ORIGINS
+
+    second = urlsplit(ACCOUNT_ORIGINS["2"]).hostname
+    first = urlsplit(ACCOUNT_ORIGINS["1"]).hostname
+    opener, hosts = _region_opener(second)
+    client = Eye4AccountClient(opener=opener)
+    devices = client.enumerate("viewer@example.com", "password")
+    assert [device.name for device in devices] == ["Cabin"]
+    assert client.region == "2"
+    # Region 1 failed at its first request; every later request used region 2.
+    assert hosts == [first, second, second, second]
+
+
+def test_auto_region_prefers_the_first_region() -> None:
+    from okam_native.account import ACCOUNT_ORIGINS
+
+    first = urlsplit(ACCOUNT_ORIGINS["1"]).hostname
+    opener, hosts = _region_opener(first)
+    client = Eye4AccountClient(opener=opener)
+    client.enumerate("viewer@example.com", "password")
+    assert client.region == "1"
+    assert set(hosts) == {first}
+
+
+def test_a_fixed_region_uses_only_that_region() -> None:
+    from okam_native.account import ACCOUNT_ORIGINS
+
+    first = urlsplit(ACCOUNT_ORIGINS["1"]).hostname
+    opener, hosts = _region_opener(first)
+    with pytest.raises(AccountError) as caught:
+        Eye4AccountClient(opener=opener, region="2").enumerate("viewer@example.com", "secret")
+    # One region: the message is the same as before regions existed.
+    assert str(caught.value).startswith("official account service request failed step=summary")
+    assert set(hosts) == {urlsplit(ACCOUNT_ORIGINS["2"]).hostname}
+
+
+def test_failing_in_every_region_names_each_region_without_hosts() -> None:
+    from okam_native.account import ACCOUNT_ORIGINS
+
+    opener, _hosts = _region_opener("unused.invalid")
+    with pytest.raises(AccountError) as caught:
+        Eye4AccountClient(opener=opener).enumerate("viewer@example.com", "secret")
+    message = str(caught.value)
+    assert "region=1 official account service request failed step=summary" in message
+    assert "region=2 official account service request failed step=summary" in message
+    for origin in ACCOUNT_ORIGINS.values():
+        assert urlsplit(origin).hostname not in message
+    assert "viewer@example.com" not in message
+
+
+def test_an_unknown_region_is_rejected() -> None:
+    with pytest.raises(AccountError):
+        Eye4AccountClient(region="3")
+
+
+def test_a_region_that_knows_the_account_keeps_its_error() -> None:
+    import urllib.error
+
+    from okam_native.account import ACCOUNT_ORIGINS
+
+    hosts: list[str] = []
+
+    def opener(request, _timeout: float) -> bytes:
+        url = urlsplit(request.full_url)
+        hosts.append(url.hostname or "")
+        if url.path == "/user/summary":
+            return json.dumps({"userid": 123456789}).encode()
+        raise urllib.error.HTTPError(request.full_url, 401, "denied", {}, None)
+
+    with pytest.raises(AccountError) as caught:
+        Eye4AccountClient(opener=opener).enumerate("viewer@example.com", "secret")
+    assert "step=login" in str(caught.value)
+    assert "region=" not in str(caught.value)
+    # Rejected credentials are never retried against the other region.
+    assert set(hosts) == {urlsplit(ACCOUNT_ORIGINS["1"]).hostname}

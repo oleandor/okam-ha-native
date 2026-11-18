@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.1
+
+- Supports O-KAM accounts in the account service's second region, which
+  accounts from some countries, for example in Latin America, use. The new
+  optional `account_region` option defaults to `auto`: the app tries region 1,
+  then region 2. Before, such accounts failed at startup with `AccountError`,
+  for example `step=summary ... http_status=404` (#23, #24).
+
 ## 1.4.0
 
 - Adds camera controls on `aarch64`: a White light switch and a

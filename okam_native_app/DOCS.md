@@ -16,6 +16,7 @@ that account in the O-KAM app once and confirm that live view works.
 | --- | --- |
 | `account_username` | Email address of the O-KAM account |
 | `account_password` | Password of the O-KAM account |
+| `account_region` | Optional account service region: `auto` (default), `1` or `2` |
 | `camera_password` | Optional camera-level password override; normally leave blank |
 | `api_token` | A random local secret of at least 16 characters chosen by you |
 | `camera_id` | Home Assistant camera alias when the account has one camera, for example `cabin` |
@@ -23,6 +24,14 @@ that account in the O-KAM app once and confirm that live view works.
 | `idle_timeout_seconds` | Delay before disconnecting after the final viewer closes; `120` is recommended |
 | `probe_camera` | Optional diagnostic: camera alias to probe for video channels at startup; normally leave blank |
 | `pc_client_live_start` | Compatibility mode for cameras that connect but send no video; normally leave disabled |
+
+The O-KAM account service runs in two regions, and accounts created in some
+countries, for example in Latin America, exist only in region 2. With
+`account_region` blank or `auto`, the app tries region 1 and, if region 1
+does not know the account, region 2. Rejected credentials are not retried in
+the other region. The startup log names the region that worked
+(`account_enumerated=true region=2 ...`). Set `1` or `2` to use one region
+only, for example when the account exists in both.
 
 The API token is not an O-KAM credential. Create a new random value and enter
 the identical value when adding the Home Assistant integration.

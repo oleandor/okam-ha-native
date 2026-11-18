@@ -5,6 +5,9 @@ configuration:
   account_password:
     name: O-KAM account password
     description: Password for the O-KAM account.
+  account_region:
+    name: O-KAM account region
+    description: Optional. The account service region. Auto tries region 1, then region 2. Accounts from some countries, for example in Latin America, are in region 2.
   api_token:
     name: Local API token
     description: A random secret of at least 16 characters that you create and also enter in the Home Assistant integration.

@@ -11,7 +11,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
-ACCOUNT_ORIGIN = "https://api.eye4.cn"
+# The official account service runs in two regions. Accounts created in some
+# countries, for example in Latin America, exist only in region 2.
+ACCOUNT_ORIGINS = {
+    "1": "https://api.eye4.cn",
+    "2": "https://api-2.eye4.cn",
+}
+ACCOUNT_REGIONS = ("auto", *ACCOUNT_ORIGINS)
 MAX_RESPONSE_BYTES = 1024 * 1024
 HTTP_TIMEOUT_SECONDS = 15.0
 
@@ -63,8 +69,15 @@ def _request_failure(path: str, error_type: str, extra: str = "") -> str:
 class Eye4AccountClient:
     """Reproduce the three official WebViewer account requests over HTTPS."""
 
-    def __init__(self, *, opener: OpenRequest = _open_request) -> None:
+    def __init__(self, *, opener: OpenRequest = _open_request, region: str = "auto") -> None:
+        if region not in ACCOUNT_REGIONS:
+            raise AccountError("account region is invalid")
         self._opener = opener
+        self._regions = tuple(ACCOUNT_ORIGINS) if region == "auto" else (region,)
+        self._origin = ACCOUNT_ORIGINS[self._regions[0]]
+        # The region whose service enumerated the account, once one has.
+        self.region: str | None = None
+        self._account_found = False
 
     def _request_json(
         self,
@@ -76,7 +89,7 @@ class Eye4AccountClient:
     ) -> Any:
         if not path.startswith("/") or "//" in path or ".." in path:
             raise AccountError("invalid official account service path")
-        url = ACCOUNT_ORIGIN + path
+        url = self._origin + path
         if query:
             url += "?" + urllib.parse.urlencode(query)
         data = None
@@ -114,10 +127,34 @@ class Eye4AccountClient:
         return result
 
     def enumerate(self, username: str, password: str) -> list[AccountDevice]:
-        """Authenticate and return visible devices without logging identifiers."""
+        """Authenticate and return visible devices without logging identifiers.
+
+        With region ``auto``, the next region is tried only while a region
+        does not know the account (its summary step fails). Once a region
+        knows the account, its errors, such as rejected credentials, stand.
+        If no region knows the account, the error names each region's failure.
+        """
 
         if not username or not password or len(username) > 320 or len(password) > 1024:
             raise AccountError("O-KAM account credentials are invalid")
+        failures: list[str] = []
+        for region in self._regions:
+            self._origin = ACCOUNT_ORIGINS[region]
+            self._account_found = False
+            try:
+                devices = self._enumerate_region(username, password)
+            except AccountError as error:
+                if self._account_found:
+                    raise
+                failures.append(f"region={region} {error}")
+                continue
+            self.region = region
+            return devices
+        if len(failures) == 1:
+            raise AccountError(failures[0].partition(" ")[2])
+        raise AccountError("; ".join(failures))
+
+    def _enumerate_region(self, username: str, password: str) -> list[AccountDevice]:
         summary = self._request_json(
             "POST", "/user/summary", form={"name": username, "oemid": "VSTC"}
         )
@@ -126,6 +163,7 @@ class Eye4AccountClient:
         user_id = summary.get("userid")
         if not isinstance(user_id, (str, int)) or not str(user_id).isdigit():
             raise AccountError("official account summary omitted the user identifier")
+        self._account_found = True
 
         password_digest = hashlib.md5(  # noqa: S324 - required by official protocol
             password.encode("utf-8"), usedforsecurity=False

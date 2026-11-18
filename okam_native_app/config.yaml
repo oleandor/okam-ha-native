@@ -1,5 +1,5 @@
 name: O-KAM Native Bridge
-version: 1.4.0
+version: 1.4.1
 slug: okam_native
 description: Self-contained native O-KAM camera bridge for Home Assistant
 url: https://github.com/oleandor/okam-ha-native
@@ -29,6 +29,7 @@ options:
 schema:
   account_username: email
   account_password: password
+  account_region: list(auto|1|2)?
   camera_password: password?
   api_token: password
   camera_id: "match(^[A-Za-z0-9_-]{1,32}$)"
