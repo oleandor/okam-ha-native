@@ -73,6 +73,15 @@ class OkamApi:
             json={"idle_timeout_seconds": idle_timeout},
         )
 
+    async def control(self, camera_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        # The bridge may have to wake the camera and start its session first.
+        return await self._request(
+            "POST",
+            f"/api/cameras/{camera_id}/controls",
+            json=payload,
+            timeout=ClientTimeout(total=90, connect=5),
+        )
+
     async def stream_source(self, camera_id: str) -> str:
         result = await self._request("GET", f"/api/cameras/{camera_id}/stream/source")
         return str(result["stream_url"])

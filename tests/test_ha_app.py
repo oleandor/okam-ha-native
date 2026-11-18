@@ -12,7 +12,7 @@ def test_native_bridge_is_a_prebuilt_64_bit_ha_app() -> None:
     assert "boot: auto" in config
     assert "stage: experimental" not in config
     assert "machine:" not in config
-    assert "version: 1.3.0" in config
+    assert "version: 1.4.0" in config
     assert "idle_timeout_seconds: 120" in config
     assert "account_username: email" in config
     assert "account_password: password" in config
@@ -75,7 +75,7 @@ def test_repository_contains_camera_integration_for_native_api() -> None:
     manifest = (component / "manifest.json").read_text(encoding="utf-8")
     config_flow = (component / "config_flow.py").read_text(encoding="utf-8")
     camera = (component / "camera.py").read_text(encoding="utf-8")
-    assert '"version": "1.3.0"' in manifest
+    assert '"version": "1.4.0"' in manifest
     assert "http://homeassistant.local:8099" in config_flow
     assert "CameraEntityFeature.STREAM" in camera
     assert "_attr_has_entity_name = False" in camera
@@ -245,6 +245,26 @@ def test_pc_client_live_start_is_opt_in_in_schema_and_helper() -> None:
     assert "pc_client_live_start = account_user_id != NULL;" in helper
 
 
+def test_integration_exposes_camera_controls_only_when_supported() -> None:
+    component = ROOT / "custom_components" / "okam"
+    constants = (component / "const.py").read_text(encoding="utf-8")
+    switch = (component / "switch.py").read_text(encoding="utf-8")
+    select = (component / "select.py").read_text(encoding="utf-8")
+    controls = (component / "controls.py").read_text(encoding="utf-8")
+    api = (component / "api.py").read_text(encoding="utf-8")
+
+    assert 'PLATFORMS = ["camera", "switch", "select", "sensor"]' in constants
+    for platform in (switch, select):
+        assert "if controls_supported(runtime):" in platform
+    assert '_control_key = "light"' in switch
+    assert "siren" not in switch
+    assert '_control_key = "night_vision"' in select
+    # Entity state comes from the bridge's last confirmed state; it never
+    # polls the camera on its own.
+    assert 'self.coordinator.data.get("controls")' in controls
+    assert '/controls"' in api
+
+
 def test_release_creation_is_automated_and_guarded() -> None:
     # Releases were created by hand, so a merge published the image without a
     # release entry. The step reuses the latest-tag guard, so a test build
@@ -260,6 +280,18 @@ def test_release_creation_is_automated_and_guarded() -> None:
     assert 'gh release view "v$VERSION"' in workflow
     # Creating a release needs write access the workflow does not grant by default.
     assert "contents: write" in workflow
+
+
+def test_battery_and_power_sensors_match_the_bridge() -> None:
+    import re
+
+    from okam_native.wakeup import POWER_STATES
+
+    sensor = (ROOT / "custom_components" / "okam" / "sensor.py").read_text(encoding="utf-8")
+    listed = re.findall(r'^    "([a-z_]+)",$', sensor, re.MULTILINE)
+    assert sorted(set(POWER_STATES.values())) == sorted(listed)
+    assert 'self.coordinator.data.get("battery_percent")' in sensor
+    assert 'self.coordinator.data.get("power_state")' in sensor
 
 
 def test_release_pr_publishes_its_image_before_the_merge() -> None:

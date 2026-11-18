@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.0
+
+- Adds camera controls on `aarch64`: a White light switch and a
+  Night vision select (black and white, full color, smart, starlight), using
+  the commands of the official O-KAM SDK. Controls go through the camera's
+  live session, so the bridge never opens a second connection, and reading
+  their state never wakes the camera.
+- Adds a **Battery** sensor (with a `charging` attribute) and a **Power state**
+  sensor (awake, sleeping, deep sleep, ...). The battery level is read while
+  the camera is awake for live view anyway, and the power state comes from the
+  wake service, so neither ever wakes the camera.
+- Logs `camera_power ... asleep=true|false` after every live session, so it is
+  visible whether the camera went back to sleep and how long that took.
+
 ## 1.3.0
 
 Community contributions from the forks of this repository, ported with the
