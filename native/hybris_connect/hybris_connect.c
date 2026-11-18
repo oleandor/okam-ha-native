@@ -410,6 +410,7 @@ static bool is_h265_frame(const unsigned char *header) {
  * only while a request is pending. Results are reported on stderr as
  * `control_state` lines that carry integers only. */
 #define CONTROL_OP_LIGHT 1U
+#define CONTROL_OP_SIREN 2U
 #define CONTROL_OP_NIGHT_VISION 3U
 #define CONTROL_OP_QUERY 4U
 #define CONTROL_OP_STATUS 5U
@@ -469,9 +470,10 @@ static bool run_control(unsigned int op, unsigned int value) {
     char command[96];
     switch (op) {
     case CONTROL_OP_LIGHT:
+    case CONTROL_OP_SIREN:
         if (value > 1U) return false;
-        snprintf(command, sizeof(command), "trans_cmd_string.cgi?cmd=2109&command=0&light=%u&",
-                 value);
+        snprintf(command, sizeof(command), "trans_cmd_string.cgi?cmd=2109&command=0&%s=%u&",
+                 op == CONTROL_OP_LIGHT ? "light" : "siren", value);
         send_cgi(controls.write_cgi, controls.client, command);
         send_cgi(controls.write_cgi, controls.client, LIGHT_SIREN_STATUS_COMMAND);
         return true;

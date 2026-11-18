@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Adds a **Siren** switch on `aarch64`, next to the White light switch. Like
+  the other controls, it goes through the camera's live session.
+
 ## 1.4.0
 
 - Adds camera controls on `aarch64`: a White light switch and a

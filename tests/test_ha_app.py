@@ -257,7 +257,7 @@ def test_integration_exposes_camera_controls_only_when_supported() -> None:
     for platform in (switch, select):
         assert "if controls_supported(runtime):" in platform
     assert '_control_key = "light"' in switch
-    assert "siren" not in switch
+    assert '_control_key = "siren"' in switch
     assert '_control_key = "night_vision"' in select
     # Entity state comes from the bridge's last confirmed state; it never
     # polls the camera on its own.
