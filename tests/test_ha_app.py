@@ -12,7 +12,7 @@ def test_native_bridge_is_a_prebuilt_64_bit_ha_app() -> None:
     assert "boot: auto" in config
     assert "stage: experimental" not in config
     assert "machine:" not in config
-    assert "version: 1.4.1" in config
+    assert "version: 1.4.2" in config
     assert "idle_timeout_seconds: 120" in config
     assert "account_username: email" in config
     assert "account_password: password" in config
@@ -75,7 +75,7 @@ def test_repository_contains_camera_integration_for_native_api() -> None:
     manifest = (component / "manifest.json").read_text(encoding="utf-8")
     config_flow = (component / "config_flow.py").read_text(encoding="utf-8")
     camera = (component / "camera.py").read_text(encoding="utf-8")
-    assert '"version": "1.4.1"' in manifest
+    assert '"version": "1.4.2"' in manifest
     assert "http://homeassistant.local:8099" in config_flow
     assert "CameraEntityFeature.STREAM" in camera
     assert "_attr_has_entity_name = False" in camera
@@ -309,3 +309,23 @@ def test_release_pr_publishes_its_image_before_the_merge() -> None:
     # behind the main-only guard.
     assert '[ "${GITHUB_REF}" = "refs/heads/main" ]' in workflow
     assert "if: needs.prepare.outputs.move_latest == 'true'" in workflow
+
+
+def test_integration_and_app_ship_their_own_icons() -> None:
+    import struct
+
+    def png_size(path) -> tuple[int, int]:
+        data = path.read_bytes()
+        assert data[:8] == b"\x89PNG\r\n\x1a\n"
+        return struct.unpack(">II", data[16:24])
+
+    # Home Assistant 2026.3+ shows brand images from the integration itself,
+    # instead of a placeholder in notifications and on the integration card.
+    brand = ROOT / "custom_components" / "okam" / "brand"
+    assert png_size(brand / "icon.png") == (256, 256)
+    assert png_size(brand / "dark_icon.png") == (256, 256)
+    assert png_size(brand / "icon@2x.png") == (512, 512)
+    assert png_size(brand / "dark_icon@2x.png") == (512, 512)
+    # The app store shows the app's own icon and logo.
+    assert png_size(ROOT / "okam_native_app" / "icon.png") == (128, 128)
+    assert png_size(ROOT / "okam_native_app" / "logo.png") == (256, 256)
