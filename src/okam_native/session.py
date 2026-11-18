@@ -228,15 +228,19 @@ class NativeStreamSession:
             if not isinstance(value, bool):
                 raise P2PError("camera control value is invalid")
             operand = int(value)
-            watched = name
+            watched: tuple[str, ...] = (name,)
         elif name == "night_vision":
             if value not in NIGHT_VISION_MODES:
                 raise P2PError("camera control value is invalid")
             operand = NIGHT_VISION_MODES.index(value)  # type: ignore[arg-type]
-            watched = "night_vision"
+            watched = ("night_vision",)
+        elif name == "query":
+            # The camera answers a query in two replies; wait for both.
+            operand = 0
+            watched = ("light", "night_vision")
         else:
             operand = 0
-            watched = ""
+            watched = ()
         subscription = self.acquire()
         try:
             with self._lock:
@@ -252,7 +256,9 @@ class NativeStreamSession:
 
                 def answered() -> bool:
                     if watched:
-                        return self._control_updates.get(watched, 0) > before
+                        return all(
+                            self._control_updates.get(key, 0) > before for key in watched
+                        )
                     return self._control_version > before
 
                 if not self._control_changed.wait_for(answered, timeout=timeout):
